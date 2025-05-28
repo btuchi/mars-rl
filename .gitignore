@@ -1,0 +1,59 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+*.egg-info/
+*.log
+
+# === Jupyter Notebook Checkpoints ===
+.ipynb_checkpoints/
+
+# === Environments ===
+.env
+.venv/
+env/
+venv/
+rl_env/
+
+# === VS Code ===
+.vscode/
+.settings/
+
+# === Mac OS Trash ===
+.DS_Store
+
+# === Shell Scripts Outputs ===
+*.out
+slurm-*.out
+
+# === Models / Features ===
+*.ckpt
+*.pt
+*.pth
+*.npz
+*.npy
+
+# === Caches ===
+cache/
+*.cache
+*.torch
+__results__/
+
+# === Hugging Face Diffusers ===
+*.safetensors
+*.token
+hub/
+
+# === Image Dumps ===
+*.png
+*.jpg
+*.jpeg
+*.webp
+samples/
+outputs/
+generated_craters/
+
+# === Git Ignore This Gitignore ===
+.gitignore
