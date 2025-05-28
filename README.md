@@ -137,5 +137,5 @@ Output includes:
 ## 📬 Contact
 
 Maintained by **Bryce Tu Chi**
-Email: [btuchi@g.hmc.edu](mailto:btuchi@g.hmc.edu)
+Email: [btuchi@g.hmc.edu](mailto:brycetuchi@gmail.com)
 
