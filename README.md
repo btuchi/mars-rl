@@ -9,6 +9,74 @@ This project explores how to fine-tune diffusion models (e.g., Stable Diffusion)
 - Train using **policy gradient RL**, treating each denoising step in the diffusion trajectory as an action.
 - Evaluate how well generated images span the reference space of real crater images.
 
+
+## 🧪 Project Plan Overview
+
+This project follows a step-by-step pipeline to fine-tune a diffusion model for Martian terrain image generation with a focus on visual diversity.
+
+### 🔹 Step 1: Reference Dataset Preparation
+
+We curate ~68 real Martian crater images per category, making sure they cover characteristics such as:
+- Size (small to massive)
+- Hue, Contrast, Saturation (hsv)
+
+
+### 🔹 Step 2: Feature Extraction Pipeline
+
+We use a CLIP visual encoder to extract 512-dimensional feature vectors from each reference image. These features are stored as `.npy` files for reuse.
+
+Once synthetic images are generated, we extract features from them too and compare them to the reference set — enabling reward calculation later.
+
+### 🔹 Step 3: Diversity Reward Function
+
+We implement two reward functions:
+- **MMD (Maximum Mean Discrepancy)**: measures how closely the generated feature distribution matches the reference distribution.
+- **GP-MI (Gaussian Process Mutual Information)**: captures mutual coverage between generated and reference features.
+
+We validate the reward by testing known datasets with increasing diversity levels (e.g., all identical → highly varied craters), and check if the reward increases accordingly.
+
+### 🔹 Step 4: Individual Reward Estimation
+
+We compute marginal utility for each generated image:
+```math
+\text{Reward}(x_i) = \text{DiversityReward}(X) - \text{DiversityReward}(X \setminus \{x_i\})
+
+```
+
+This tells us which individual images contribute most to the overall diversity. We can rank images and identify duplicates or particularly novel outputs.
+
+### 🔹 Step 5: RL Fine-tuning Framework
+
+We modify the diffusion sampler to record **trajectories** — the full sequence of denoising steps taken to generate each image.
+
+Then we apply **policy gradient RL**:
+- Good (diverse) images get higher reward → increase likelihood of those denoising steps
+- Low-reward images → discourage similar actions
+- Loss: `-log(probability of trajectory) × reward`
+
+To stabilize training, we plan to use:
+- **Trust region constraints** to limit drastic model updates
+- **LoRA (Low-Rank Adaptation)** for efficient fine-tuning of large diffusion models
+
+### 🔹 Step 6: Training Loop Implementation
+
+We build a full training loop that:
+- Generates batches of images
+- Computes rewards
+- Logs reward values over time
+- Saves model checkpoints
+- Uses evaluation metrics like FID, Precision, and Recall to monitor diversity
+
+### 🔹 Step 7: Evaluation System
+
+To assess improvement, we compute:
+- **Quantitative metrics**: FID, Precision, Recall, KL divergence, MMD
+- **Visual metrics**: t-SNE plots, feature space clustering
+- **Baseline comparison**: Check if the fine-tuned model generates more modes and more distinct images than the original
+
+This evaluation confirms if the model is learning to generate **diverse, high-quality crater images** aligned with scientific variability observed in real Martian terrain.
+
+
 ## 🧱 Directory Structure
 
 ```
