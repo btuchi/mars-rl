@@ -110,7 +110,7 @@ RL/
 - ✅ Extracted CLIP-based features from generated images.
 - ✅ Implemented and tested MMD reward function using synthetic and real feature vectors.
 - ✅ Conducted full pipeline smoke test (`simple_test.py`) — **passed on GPU node**.
-- 🔜 Next: Implement training loop with policy gradient updates using recorded trajectories.
+- 🔜 Next: Do more testing on the trajectory recording pipeline. Implement training loop with policy gradient updates using recorded trajectories.
 
 ## 📦 Dependencies
 
