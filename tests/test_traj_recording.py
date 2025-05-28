@@ -187,8 +187,8 @@ def test_diversity_reward_integration(trajectories):
         print(f"Diversity reward: {diversity_reward:.4f}")
         
         # Calculate individual rewards
-        from diversity_reward import calculate_individual_diversity_rewards_batched
-        individual_rewards = calculate_individual_diversity_rewards_batched(
+        from diversity_reward import calculate_individual_diversity_rewards
+        individual_rewards = calculate_individual_diversity_rewards(
             generated_features, reference_features
         )
         print(f"Individual rewards: {individual_rewards}")

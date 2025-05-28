@@ -26,4 +26,4 @@ nvidia-smi || echo "nvidia-smi failed — no GPU visible"
 
 # Run test
 echo "Running test..."
-python /jet/home/btuchi/BRYCE/RL/tests/simple_test.py
+python /jet/home/btuchi/BRYCE/RL/tests/simple_test_traj_recording.py
