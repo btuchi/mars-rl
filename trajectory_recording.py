@@ -40,6 +40,9 @@ class DiffusionSampler:
     def __init__(self, model_id: str = "CompVis/stable-diffusion-v1-4", device: str = "cuda"):
         self.device = device
         
+        # Add memory optimization
+        torch.cuda.empty_cache()
+
         # Load Stable Diffusion pipeline
         self.pipe = StableDiffusionPipeline.from_pretrained(
             model_id,
@@ -47,6 +50,9 @@ class DiffusionSampler:
             safety_checker=None,
             requires_safety_checker=False
         ).to(device)
+
+        # Enable memory efficient attention
+        self.pipe.enable_attention_slicing()
         
         # Extract components we need
         self.unet = self.pipe.unet

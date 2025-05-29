@@ -1,8 +1,12 @@
-import torch
+import torch, gc
+torch.cuda.empty_cache()
+gc.collect()
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from trajectory_recording import DiffusionSampler, extract_features_from_trajectory
 import time
 
@@ -24,9 +28,9 @@ def test_basic_sampling():
     start_time = time.time()
     trajectory = sampler.sample_with_trajectory_recording(
         prompt="an aerial image of a mars crater",
-        num_inference_steps=20,  # Reduced for faster testing
-        height=512,
-        width=512
+        num_inference_steps=10,  # Reduced for faster testing
+        height=256,
+        width=256
     )
     generation_time = time.time() - start_time
     print(f"Generation completed in {generation_time:.2f} seconds")
@@ -84,7 +88,8 @@ def test_feature_extraction(trajectory):
     try:
         # Extract features from final image
         print("Extracting CLIP features...")
-        features = extract_features_from_trajectory(trajectory, None)
+        with torch.no_grad():
+            features = extract_features_from_trajectory(trajectory, None)
         print(f"Feature extraction successful!")
         print(f"- Feature shape: {features.shape}")
         print(f"- Feature dtype: {features.dtype}")
