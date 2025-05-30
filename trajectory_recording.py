@@ -41,7 +41,7 @@ class DiffusionSampler:
         self.device = device
         
         # Add memory optimization
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
 
         # Load Stable Diffusion pipeline
         self.pipe = StableDiffusionPipeline.from_pretrained(
@@ -51,8 +51,8 @@ class DiffusionSampler:
             requires_safety_checker=False
         ).to(device)
 
-        # Enable memory efficient attention
-        self.pipe.enable_attention_slicing()
+        # # Enable memory efficient attention
+        # self.pipe.enable_attention_slicing()
         
         # Extract components we need
         self.unet = self.pipe.unet
