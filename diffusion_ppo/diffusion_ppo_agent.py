@@ -112,7 +112,6 @@ class DiffusionReplayMemory:
         self.rewards.append(reward)
         self.values.append(value)
         self.log_probs.append(log_prob)
-        self.done_cap.append(True)  # Always done for diffusion trajectories
     
     # TODO: batch them as they are generated
     def sample(self):
@@ -132,7 +131,6 @@ class DiffusionReplayMemory:
                 self.trajectories,                  # "actions" 
                 np.array(self.rewards),            # rewards
                 np.array(self.values),             # values
-                np.array(self.done_cap),           # dones (always True)
                 np.array(self.log_probs),          # for next_state equivalent
                 batches)
     
@@ -143,7 +141,6 @@ class DiffusionReplayMemory:
         self.rewards = []
         self.values = []
         self.log_probs = []
-        self.done_cap = []
 
 class DiffusionRewardFunction:
     """
@@ -196,8 +193,6 @@ class DiffusionRewardFunction:
         
         return np.array(normalized_rewards)
 
-
-    # TODO: should generate a batch and calculate average
     def calculate_average_batch_reward(self, trajectories: List[DiffusionTrajectory]) -> float:
         """Calculate average reward for a batch (for episode-level tracking)"""
 
@@ -227,8 +222,6 @@ class DiffusionPPOAgent:
                  feature_dim: int = 512, num_inference_steps: int = 20, images_per_prompt: int = 4):
         
         # PPO hyperparameters (same as vanilla PPO)
-        # self.VALUE_CLIP = False
-        # self.VALUE_CLIP_RANGE = 0.2
         
         self.LR_ACTOR = 1e-6       # Lower for diffusion models
         self.LR_CRITIC = 5e-5     # Lower for diffusion models
@@ -408,20 +401,7 @@ class DiffusionPPOAgent:
                 batch_values = self.critic(memo_features_tensor[batch]).squeeze()
                 batch_returns = memo_returns_tensor[batch]
                 
-                if self.VALUE_CLIP:
-                    with torch.no_grad():
-                        old_values = self.critic(memo_features_tensor).squeeze()
-                    
-                    batch_old_values = old_values[batch]
-                    value_loss_unclipped = (batch_values - batch_returns) ** 2
-                    
-                    values_clipped = batch_old_values + torch.clamp(
-                        batch_values - batch_old_values, -self.VALUE_CLIP_RANGE, self.VALUE_CLIP_RANGE
-                    )
-                    value_loss_clipped = (values_clipped - batch_returns) ** 2
-                    critic_loss = torch.max(value_loss_unclipped, value_loss_clipped).mean()
-                else:
-                    critic_loss = nn.MSELoss()(batch_values, batch_returns)
+                critic_loss = nn.MSELoss()(batch_values, batch_returns)
                 
                 # Store losses
                 all_actor_losses.append(actor_loss.item())
