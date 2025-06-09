@@ -113,7 +113,6 @@ class DiffusionReplayMemory:
         self.values.append(value)
         self.log_probs.append(log_prob)
     
-    # TODO: batch them as they are generated
     def sample(self):
         """
         Prepare batched trajectory data for PPO training
@@ -192,12 +191,6 @@ class DiffusionRewardFunction:
             normalized_rewards.append(normalized_reward)
         
         return np.array(normalized_rewards)
-
-    def calculate_average_batch_reward(self, trajectories: List[DiffusionTrajectory]) -> float:
-        """Calculate average reward for a batch (for episode-level tracking)"""
-
-        individual_rewards = self.calculate_batch_rewards(trajectories)
-        return np.mean(individual_rewards)
     
     def normalize_reward(self, reward: float) -> float:
         """Normalize reward based on running statistics"""
