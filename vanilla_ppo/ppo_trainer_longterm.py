@@ -23,7 +23,7 @@ def clear_logs():
     RETURN_LOG.clear()
 
 def plot_long_term_training(REWARD_BUFFER, training_stats, final_episode=None, start_episode=0):
-    """Enhanced plotting for long-term training analysis"""
+    """Fixed 7-plot layout for comprehensive PPO training analysis"""
     
     # Determine episode count and range
     num_episodes = final_episode + 1 if final_episode else len(REWARD_BUFFER)
@@ -35,86 +35,106 @@ def plot_long_term_training(REWARD_BUFFER, training_stats, final_episode=None, s
     
     # Handle BEST_REWARD_LOG size mismatch
     if len(BEST_REWARD_LOG) < num_episodes:
-        # Pad BEST_REWARD_LOG to match episode range if needed
         best_reward_data = BEST_REWARD_LOG
         best_reward_episodes = range(len(BEST_REWARD_LOG))
     else:
         best_reward_data = BEST_REWARD_LOG[start_episode:num_episodes]
         best_reward_episodes = episode_range
     
+    # Create fixed 3x3 layout (7 plots + 2 empty or filled)
     fig, axs = plt.subplots(3, 3, figsize=(20, 15))
+    axs = axs.flatten()  # Convert to 1D array for easy indexing
     
-    # 1. Episode Rewards with multiple smoothing windows
-    axs[0, 0].plot(episode_range, reward_data, alpha=0.3, label="Raw Rewards")
+    # Plot 1: Episode Rewards (Top Left)
+    axs[0].plot(episode_range, reward_data, alpha=0.3, label="Raw Rewards", color='lightblue')
     
-    # Multiple smoothing windows for long-term analysis
     if actual_episodes_trained > 100:
         smooth_100 = np.convolve(reward_data, np.ones(100)/100, mode='valid')
         smooth_episodes = range(start_episode + 99, num_episodes)
-        axs[0, 0].plot(smooth_episodes, smooth_100, linewidth=2, label="MA-100")
+        axs[0].plot(smooth_episodes, smooth_100, linewidth=2, label="MA-100", color='orange')
     
     if actual_episodes_trained > 500:
         smooth_500 = np.convolve(reward_data, np.ones(500)/500, mode='valid')
         smooth_episodes = range(start_episode + 499, num_episodes)
-        axs[0, 0].plot(smooth_episodes, smooth_500, linewidth=3, label="MA-500")
+        axs[0].plot(smooth_episodes, smooth_500, linewidth=3, label="MA-500", color='green')
     
-    axs[0, 0].set_title("Episode Rewards (Long-term View)")
-    axs[0, 0].set_xlabel("Episode")
-    axs[0, 0].set_ylabel("Reward")
-    axs[0, 0].legend()
-    axs[0, 0].grid(True, alpha=0.3)
+    axs[0].set_title("Episode Rewards (Long-term View)", fontsize=12, fontweight='bold')
+    axs[0].set_xlabel("Episode")
+    axs[0].set_ylabel("Reward")
+    axs[0].legend()
+    axs[0].grid(True, alpha=0.3)
     
-    # 2. Training Losses
-    if len(ACTOR_LOSS_LOG) > 0:
+    # Plot 2: Combined Training Losses (Top Middle)
+    if len(ACTOR_LOSS_LOG) > 0 and len(CRITIC_LOSS_LOG) > 0:
         loss_episodes = np.linspace(start_episode, num_episodes, len(ACTOR_LOSS_LOG))
-        axs[0, 1].semilogy(loss_episodes, ACTOR_LOSS_LOG, label="Actor Loss", linewidth=2)
-        axs[0, 1].semilogy(loss_episodes, CRITIC_LOSS_LOG, label="Critic Loss", linewidth=2)
-        axs[0, 1].set_title("Training Losses (Log Scale)")
-        axs[0, 1].set_xlabel("Episode")
-        axs[0, 1].set_ylabel("Loss (log scale)")
-        axs[0, 1].legend()
-        axs[0, 1].grid(True, alpha=0.3)
+        axs[1].semilogy(loss_episodes, ACTOR_LOSS_LOG, label="Actor Loss", linewidth=2, color='blue')
+        axs[1].semilogy(loss_episodes, CRITIC_LOSS_LOG, label="Critic Loss", linewidth=2, color='red')
+        axs[1].set_title("Training Losses (Log Scale)", fontsize=12, fontweight='bold')
+        axs[1].set_xlabel("Episode")
+        axs[1].set_ylabel("Loss (log scale)")
+        axs[1].legend()
+        axs[1].grid(True, alpha=0.3)
+    else:
+        axs[1].text(0.5, 0.5, "No Loss Data Available", ha='center', va='center', 
+                   transform=axs[1].transAxes, fontsize=14)
+        axs[1].set_title("Training Losses", fontsize=12, fontweight='bold')
     
-    # 3. Best Reward Progress - FIXED
+    # Plot 3: Best Reward Progress (Top Right)
     if len(best_reward_data) > 0:
-        axs[0, 2].plot(best_reward_episodes, best_reward_data, linewidth=2, color='green')
-        axs[0, 2].set_title("Best Reward Progress")
-        axs[0, 2].set_xlabel("Episode")
-        axs[0, 2].set_ylabel("Best Reward")
-        axs[0, 2].grid(True, alpha=0.3)
+        axs[2].plot(best_reward_episodes, best_reward_data, linewidth=3, color='green', marker='o', markersize=2)
+        axs[2].set_title("Best Reward Progress", fontsize=12, fontweight='bold')
+        axs[2].set_xlabel("Episode")
+        axs[2].set_ylabel("Best Reward")
+        axs[2].grid(True, alpha=0.3)
+    else:
+        axs[2].text(0.5, 0.5, "No Best Reward Data", ha='center', va='center', 
+                   transform=axs[2].transAxes, fontsize=14)
+        axs[2].set_title("Best Reward Progress", fontsize=12, fontweight='bold')
     
-    # 6. Evaluation vs Training Rewards
-    if 'episodes' in training_stats and 'eval_rewards' in training_stats:
+    # Plot 4: Evaluation vs Training Performance (Middle Left)
+    if 'episodes' in training_stats and 'eval_rewards' in training_stats and len(training_stats['eval_rewards']) > 0:
         eval_episodes = training_stats['episodes']
         eval_rewards = training_stats['eval_rewards']
-        training_rewards = training_stats['rewards']
+        training_rewards = training_stats.get('rewards', [])
         
-        axs[1, 2].plot(eval_episodes, eval_rewards, 'o-', linewidth=2, label="Evaluation", markersize=4)
-        axs[1, 2].plot(eval_episodes, training_rewards, 's-', linewidth=2, label="Training (avg)", markersize=3)
-        axs[1, 2].set_title("Evaluation vs Training Performance")
-        axs[1, 2].set_xlabel("Episode")
-        axs[1, 2].set_ylabel("Reward")
-        axs[1, 2].legend()
-        axs[1, 2].grid(True, alpha=0.3)
+        axs[3].plot(eval_episodes, eval_rewards, 'o-', linewidth=2, label="Evaluation", 
+                   markersize=4, color='blue')
+        if training_rewards:
+            axs[3].plot(eval_episodes, training_rewards, 's-', linewidth=2, 
+                       label="Training (avg)", markersize=3, color='orange')
+        
+        axs[3].set_title("Evaluation vs Training Performance", fontsize=12, fontweight='bold')
+        axs[3].set_xlabel("Episode")
+        axs[3].set_ylabel("Reward")
+        axs[3].legend()
+        axs[3].grid(True, alpha=0.3)
+    else:
+        axs[3].text(0.5, 0.5, "No Evaluation Data", ha='center', va='center', 
+                   transform=axs[3].transAxes, fontsize=14)
+        axs[3].set_title("Evaluation vs Training Performance", fontsize=12, fontweight='bold')
     
-    # 7. Critic Loss Convergence (zoomed)
-    if len(CRITIC_LOSS_LOG) > 100:
-        loss_episodes = np.linspace(0, num_episodes, len(CRITIC_LOSS_LOG))
-        axs[2, 0].plot(loss_episodes, CRITIC_LOSS_LOG, linewidth=1, alpha=0.7)
+    # Plot 5: Critic Loss Convergence (Middle Center)
+    if len(CRITIC_LOSS_LOG) > 10:
+        loss_episodes = np.linspace(start_episode, num_episodes, len(CRITIC_LOSS_LOG))
+        axs[4].plot(loss_episodes, CRITIC_LOSS_LOG, linewidth=1, alpha=0.7, color='lightcoral')
         
         # Add moving average for critic loss
         if len(CRITIC_LOSS_LOG) > 50:
             critic_smooth = np.convolve(CRITIC_LOSS_LOG, np.ones(50)/50, mode='valid')
-            loss_smooth_episodes = np.linspace(0, num_episodes, len(critic_smooth))
-            axs[2, 0].plot(loss_smooth_episodes, critic_smooth, linewidth=3, color='red', label='MA-50')
+            loss_smooth_episodes = np.linspace(start_episode, num_episodes, len(critic_smooth))
+            axs[4].plot(loss_smooth_episodes, critic_smooth, linewidth=3, color='red', label='MA-50')
+            axs[4].legend()
         
-        axs[2, 0].set_title("Critic Loss Convergence")
-        axs[2, 0].set_xlabel("Episode")
-        axs[2, 0].set_ylabel("Critic Loss")
-        axs[2, 0].legend()
-        axs[2, 0].grid(True, alpha=0.3)
+        axs[4].set_title("Critic Loss Convergence", fontsize=12, fontweight='bold')
+        axs[4].set_xlabel("Episode")
+        axs[4].set_ylabel("Critic Loss")
+        axs[4].grid(True, alpha=0.3)
+    else:
+        axs[4].text(0.5, 0.5, "Insufficient Critic Data", ha='center', va='center', 
+                   transform=axs[4].transAxes, fontsize=14)
+        axs[4].set_title("Critic Loss Convergence", fontsize=12, fontweight='bold')
     
-    # 8. Value Predictions vs Returns
+    # Plot 6: Value Predictions vs Returns (Middle Right)
     if len(VALUE_PREDICTION_LOG) > 100 and len(RETURN_LOG) > 100:
         # Sample data for plotting (to avoid overcrowding)
         sample_size = min(2000, len(VALUE_PREDICTION_LOG))
@@ -122,36 +142,58 @@ def plot_long_term_training(REWARD_BUFFER, training_stats, final_episode=None, s
         pred_sample = [VALUE_PREDICTION_LOG[i] for i in indices]
         ret_sample = [RETURN_LOG[i] for i in indices]
         
-        axs[2, 1].scatter(pred_sample, ret_sample, alpha=0.5, s=1)
+        axs[5].scatter(pred_sample, ret_sample, alpha=0.5, s=2, color='blue')
         
         # Perfect prediction line
         all_values = pred_sample + ret_sample
         min_val, max_val = min(all_values), max(all_values)
-        axs[2, 1].plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+        axs[5].plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
         
         # Calculate and display correlation
         correlation = np.corrcoef(pred_sample, ret_sample)[0, 1]
-        axs[2, 1].set_title(f"Value Predictions vs Returns (r={correlation:.3f})")
-        axs[2, 1].set_xlabel("Predicted V(s)")
-        axs[2, 1].set_ylabel("Actual Return")
-        axs[2, 1].legend()
-        axs[2, 1].grid(True, alpha=0.3)
+        axs[5].set_title(f"Value Predictions vs Returns (r={correlation:.3f})", fontsize=12, fontweight='bold')
+        axs[5].set_xlabel("Predicted V(s)")
+        axs[5].set_ylabel("Actual Return")
+        axs[5].legend()
+        axs[5].grid(True, alpha=0.3)
+    else:
+        axs[5].text(0.5, 0.5, "Insufficient Value Data", ha='center', va='center', 
+                   transform=axs[5].transAxes, fontsize=14)
+        axs[5].set_title("Value Predictions vs Returns", fontsize=12, fontweight='bold')
     
-    # 9. Training Summary Statistics
-    axs[2, 2].axis('off')
+    # Plot 7: Actor Loss Only (Bottom Left)
+    if len(ACTOR_LOSS_LOG) > 0:
+        loss_episodes = np.linspace(start_episode, num_episodes, len(ACTOR_LOSS_LOG))
+        axs[6].semilogy(loss_episodes, ACTOR_LOSS_LOG, linewidth=2, color='blue', alpha=0.7)
+        
+        # Add moving average for actor loss
+        if len(ACTOR_LOSS_LOG) > 50:
+            actor_smooth = np.convolve(ACTOR_LOSS_LOG, np.ones(50)/50, mode='valid')
+            loss_smooth_episodes = np.linspace(start_episode, num_episodes, len(actor_smooth))
+            axs[6].semilogy(loss_smooth_episodes, actor_smooth, linewidth=3, color='darkblue', label='MA-50')
+            axs[6].legend()
+        
+        axs[6].set_title("Actor Loss Convergence", fontsize=12, fontweight='bold')
+        axs[6].set_xlabel("Episode")
+        axs[6].set_ylabel("Actor Loss (log scale)")
+        axs[6].grid(True, alpha=0.3)
+    else:
+        axs[6].text(0.5, 0.5, "No Actor Loss Data", ha='center', va='center', 
+                   transform=axs[6].transAxes, fontsize=14)
+        axs[6].set_title("Actor Loss Convergence", fontsize=12, fontweight='bold')
     
-    # Calculate final statistics - FIXED for resumed training
+    # Plot 8: Training Summary (Bottom Center)
+    axs[7].axis('off')
+    
+    # Calculate comprehensive statistics
     final_reward = REWARD_BUFFER[final_episode] if final_episode < len(REWARD_BUFFER) else 0
-    
-    # Use only the data from actual training episodes
     training_data = REWARD_BUFFER[start_episode:num_episodes]
     avg_final_1000 = np.mean(training_data[-1000:]) if len(training_data) >= 1000 else np.mean(training_data)
     
-    # Best reward from available data
     available_best_rewards = BEST_REWARD_LOG if len(BEST_REWARD_LOG) > 0 else [0]
     best_reward = max(available_best_rewards)
     
-    # Performance improvement calculation
+    # Performance improvement
     if len(training_data) > 1000:
         early_avg = np.mean(training_data[:1000])
         improvement = avg_final_1000 - early_avg
@@ -162,65 +204,103 @@ def plot_long_term_training(REWARD_BUFFER, training_stats, final_episode=None, s
     total_updates = len(ACTOR_LOSS_LOG)
     episodes_per_update = num_episodes / total_updates if total_updates > 0 else 0
     
-    # Final loss values
+    # Loss statistics
     final_actor_loss = ACTOR_LOSS_LOG[-1] if len(ACTOR_LOSS_LOG) > 0 else 0
     final_critic_loss = CRITIC_LOSS_LOG[-1] if len(CRITIC_LOSS_LOG) > 0 else 0
     
-    # Convergence assessment
     if len(CRITIC_LOSS_LOG) > 100:
         recent_critic_loss = np.mean(CRITIC_LOSS_LOG[-50:])
-        early_critic_loss = np.mean(CRITIC_LOSS_LOG[:50])
-        critic_improvement = ((early_critic_loss - recent_critic_loss) / early_critic_loss) * 100
+        early_critic_loss = np.mean(CRITIC_LOSS_LOG[:50]) if len(CRITIC_LOSS_LOG) > 50 else recent_critic_loss
+        critic_improvement = ((early_critic_loss - recent_critic_loss) / early_critic_loss) * 100 if early_critic_loss != 0 else 0
     else:
         recent_critic_loss = final_critic_loss
         critic_improvement = 0
     
+    # Performance assessment
+    convergence_status = '✅ Excellent' if recent_critic_loss < 0.1 else '⚠️ Partial' if recent_critic_loss < 0.5 else '❌ Poor'
+    performance_status = '✅ Solved' if avg_final_1000 > -150 else '⚠️ Good' if avg_final_1000 > -300 else '❌ Needs Work'
+    stability_status = '✅ Stable' if abs(improvement) < 50 else '⚠️ Variable'
+    
     summary_text = f"""
-        LONG-TERM TRAINING SUMMARY
-        ==========================
-        Total Episodes: {num_episodes:,}
-        Total Updates: {total_updates:,}
+        TRAINING SUMMARY
+        ================
+        Episodes: {num_episodes:,}
+        Updates: {total_updates:,}
         Episodes/Update: {episodes_per_update:.1f}
 
-        PERFORMANCE METRICS
-        ===================
-        Final Reward: {final_reward:.1f}
-        Best Reward: {best_reward:.1f}
+        PERFORMANCE
+        ===========
+        Final: {final_reward:.1f}
+        Best: {best_reward:.1f}
         Avg Last 1000: {avg_final_1000:.1f}
         Improvement: {improvement:+.1f}
 
-        LOSS CONVERGENCE
-        ================
-        Final Actor Loss: {final_actor_loss:.4f}
-        Final Critic Loss: {final_critic_loss:.4f}
-        Recent Critic Loss: {recent_critic_loss:.4f}
-        Critic Improvement: {critic_improvement:.1f}%
+        LOSSES
+        ======
+        Actor: {final_actor_loss:.4f}
+        Critic: {final_critic_loss:.4f}
+        Recent Critic: {recent_critic_loss:.4f}
+        Critic Δ: {critic_improvement:.1f}%
 
-        TRAINING ASSESSMENT
-        ===================
-        Convergence: {'✅ Excellent' if recent_critic_loss < 0.1 else '⚠️ Partial' if recent_critic_loss < 0.5 else '❌ Poor'}
-        Performance: {'✅ Solved' if avg_final_1000 > -150 else '⚠️ Good' if avg_final_1000 > -300 else '❌ Needs Work'}
-        Stability: {'✅ Stable' if abs(improvement) < 50 else '⚠️ Variable'}
+        ASSESSMENT
+        ==========
+        Convergence: {convergence_status}
+        Performance: {performance_status}
+        Stability: {stability_status}
     """
     
-    axs[2, 2].text(0.05, 0.95, summary_text, transform=axs[2, 2].transAxes, 
-                  fontsize=9, verticalalignment='top', fontfamily='monospace',
-                  bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+    axs[7].text(0.05, 0.95, summary_text, transform=axs[7].transAxes, 
+               fontsize=10, verticalalignment='top', fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
     
-    plt.tight_layout()
+    # Plot 9: Hide this one (Bottom Right)
+    axs[8].axis('off')
+    
+    # Add a title or additional info in the empty space
+    axs[8].text(0.5, 0.5, f"""
+        PPO TRAINING ANALYSIS
+        ===================
+        Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+        Configuration:
+        • Environment: Pendulum-v1
+        • Episodes: {start_episode:,} → {num_episodes:,}
+        • Total Training Time: {actual_episodes_trained:,} episodes
+
+        Status: Training {'Completed' if final_episode else 'In Progress'}
+    """, transform=axs[8].transAxes, ha='center', va='center',
+               fontsize=10, fontfamily='monospace',
+               bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+    
+    # Adjust layout
+    plt.tight_layout(pad=2.0)
+    
+    # Save plot
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    plt.savefig(f"ppo_longterm_training_{timestamp}.png", dpi=300, bbox_inches='tight')
+    filename = f"ppo_training_analysis_{timestamp}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    
+    print(f"📊 7-plot analysis saved as: {filename}")
     plt.show()
     
     # Print summary to console
     print(f"\n" + "="*60)
-    print(f"LONG-TERM TRAINING COMPLETED")
+    print(f"TRAINING ANALYSIS COMPLETED")
     print(f"="*60)
     print(f"Episodes: {num_episodes:,} | Updates: {total_updates:,}")
-    print(f"Final Performance: {avg_final_1000:.1f} (avg last 1000)")
-    print(f"Best Performance: {best_reward:.1f}")
-    print(f"Critic Loss Convergence: {recent_critic_loss:.4f}")
-    print(f"Total Improvement: {improvement:+.1f}")
+    
+    if len(training_data) > 0:
+        print(f"Final Performance: {avg_final_1000:.1f}")
+        print(f"Best Performance: {best_reward:.1f}")
+    
+    if len(CRITIC_LOSS_LOG) > 50:
+        print(f"Recent Critic Loss: {recent_critic_loss:.4f}")
+    
+    if len(training_data) > 1000:
+        print(f"Total Improvement: {improvement:+.1f}")
+    
+    return filename
+
 
 def save_training_summary(training_stats, num_episodes, save_path="training_summary.json"):
     """Save comprehensive training summary"""
@@ -378,11 +458,11 @@ def long_term_training_loop(max_episodes=20000, resume_from=None, save_interval=
             print(f"Elapsed: {elapsed_time/3600:.1f}h | Remaining: {estimated_time_remaining/3600:.1f}h")
             print(f"Recent performance: {avg_reward:.1f}")
         
-        # Early stopping
-        if agent.patience_counter >= agent.max_patience:
-            print(f"\n⏹️  Early stopping at episode {episode_i:,}")
-            print(f"No improvement for {agent.max_patience} episodes")
-            break
+        # # Early stopping
+        # if agent.patience_counter >= agent.max_patience:
+        #     print(f"\n⏹️  Early stopping at episode {episode_i:,}")
+        #     print(f"No improvement for {agent.max_patience} episodes")
+        #     break
         
         # Memory management for very long runs
         if episode_i % 2000 == 0 and episode_i > 0:

@@ -134,7 +134,7 @@ class LongTermPPOAgent:
     """
     def __init__(self, state_dim, action_dim, batch_size):
         # Learning Rate
-        self.LR_ACTOR = 3e-4
+        self.LR_ACTOR = 1e-4
         self.LR_CRITIC = 1e-3
         
         # PPO hyperparameters
@@ -170,7 +170,7 @@ class LongTermPPOAgent:
         self.update_count = 0
         self.best_eval_reward = -float('inf')
         self.patience_counter = 0
-        self.max_patience = 2000
+        self.max_patience = 2000 # if i want to stop early
         
         # Checkpointing
         self.checkpoint_dir = "ppo_checkpoints"
@@ -259,7 +259,7 @@ class LongTermPPOAgent:
                 ratio = torch.exp(log_probs - old_log_probs[batch])
                 batch_advantages = memo_advantages_tensor[batch]
                 
-                # PPO clipped surrogate loss - FIXED clipping
+                # PPO clipped surrogate loss
                 surr1 = ratio * batch_advantages
                 surr2 = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP) * batch_advantages
                 
