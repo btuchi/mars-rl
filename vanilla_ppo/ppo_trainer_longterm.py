@@ -217,9 +217,9 @@ def plot_long_term_training(REWARD_BUFFER, training_stats, final_episode=None, s
         critic_improvement = 0
     
     # Performance assessment
-    convergence_status = '✅ Excellent' if recent_critic_loss < 0.1 else '⚠️ Partial' if recent_critic_loss < 0.5 else '❌ Poor'
-    performance_status = '✅ Solved' if avg_final_1000 > -150 else '⚠️ Good' if avg_final_1000 > -300 else '❌ Needs Work'
-    stability_status = '✅ Stable' if abs(improvement) < 50 else '⚠️ Variable'
+    convergence_status = 'Excellent' if recent_critic_loss < 0.1 else 'Partial' if recent_critic_loss < 0.5 else 'Poor'
+    performance_status = 'Solved' if avg_final_1000 > -150 else 'Good' if avg_final_1000 > -300 else 'Needs Work'
+    stability_status = 'Stable' if abs(improvement) < 50 else 'Variable'
     
     summary_text = f"""
         TRAINING SUMMARY

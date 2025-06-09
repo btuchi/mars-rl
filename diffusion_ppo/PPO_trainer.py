@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
-from diversity_reward import calculate_mmd_reward
+from diffusion_ppo.trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
+from diffusion_ppo.diversity_reward import calculate_mmd_reward
 import numpy as np
 from typing import List, Optional
 from tqdm import tqdm

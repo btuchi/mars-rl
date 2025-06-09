@@ -44,7 +44,7 @@ class Actor(nn.Module):
         x = self.relu(self.fc1(x))
         x = self.relu(self.fc2(x))
 
-        mean = self.tanh(self.fc_mean(x)) * 2
+        mean = self.tanh(self.fc_mean(x)) * 2 # (-1, 1)?
         std = self.softplus(self.fc_std(x)) + 1e-3
         std = std.clamp(min=1e-2, max=1.0)
 
@@ -134,7 +134,7 @@ class LongTermPPOAgent:
     """
     def __init__(self, state_dim, action_dim, batch_size):
         # Learning Rate
-        self.LR_ACTOR = 1e-4
+        self.LR_ACTOR = 3e-5
         self.LR_CRITIC = 1e-3
         
         # PPO hyperparameters
@@ -255,7 +255,7 @@ class LongTermPPOAgent:
                 dist = Normal(mu, sigma)
                 log_probs = dist.log_prob(memo_actions_tensor[batch]).sum(axis=-1)
                 
-                # Calculate ratio
+                # Calculate ratio 
                 ratio = torch.exp(log_probs - old_log_probs[batch])
                 batch_advantages = memo_advantages_tensor[batch]
                 
@@ -264,8 +264,11 @@ class LongTermPPOAgent:
                 surr2 = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP) * batch_advantages
                 
                 # Constant entropy coefficient
-                entropy = dist.entropy().sum(axis=-1).mean()
-                actor_loss = -torch.min(surr1, surr2).mean() - self.ENTROPY_COEFF * entropy
+                entropy = dist.entropy().mean()
+                policy_loss = -torch.min(surr1, surr2).mean()
+                entropy_loss = -self.ENTROPY_COEFF * entropy
+                actor_loss = policy_loss + entropy_loss
+                print(f"Policy: {policy_loss.item():.4f}, Entropy: {entropy_loss.item():.4f}, Ratio: {abs(entropy_loss.item()/policy_loss.item()):.2f}")
                 
                 # Value function loss (no clipping)
                 batch_values = self.critic(memo_states_tensor[batch]).squeeze()
@@ -280,6 +283,7 @@ class LongTermPPOAgent:
                 
                 # Count clipped ratios
                 clipped = torch.abs(ratio - torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP)) > 1e-6
+                
                 clipped_count += clipped.sum().item()
                 total_samples += batch_advantages.size(0)
                 

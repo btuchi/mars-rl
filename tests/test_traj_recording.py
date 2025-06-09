@@ -7,7 +7,7 @@ from PIL import Image
 import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from trajectory_recording import DiffusionSampler, extract_features_from_trajectory
+from diffusion_ppo.trajectory_recording import DiffusionSampler, extract_features_from_trajectory
 import time
 
 def test_basic_sampling():
@@ -186,13 +186,13 @@ def test_diversity_reward_integration(trajectories):
         
         # Calculate diversity reward using your MMD function
         print("Calculating diversity reward...")
-        from diversity_reward import calculate_mmd_reward  # Adjust import as needed
+        from diffusion_ppo.diversity_reward import calculate_mmd_reward  # Adjust import as needed
         
         diversity_reward = calculate_mmd_reward(generated_features, reference_features)
         print(f"Diversity reward: {diversity_reward:.4f}")
         
         # Calculate individual rewards
-        from diversity_reward import calculate_individual_diversity_rewards
+        from diffusion_ppo.diversity_reward import calculate_individual_diversity_rewards
         individual_rewards = calculate_individual_diversity_rewards(
             generated_features, reference_features
         )

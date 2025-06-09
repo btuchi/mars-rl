@@ -3,7 +3,7 @@ import numpy as np
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from trajectory_recording import DiffusionSampler, extract_features_from_trajectory
+from diffusion_ppo.trajectory_recording import DiffusionSampler, extract_features_from_trajectory
 
 print("CUDA available:", torch.cuda.is_available())
 if torch.cuda.is_available():
@@ -47,7 +47,7 @@ def quick_test():
     # Test 4: Can we calculate diversity reward?
     try:
         print("Testing diversity reward...")
-        from diversity_reward import calculate_mmd_reward
+        from diffusion_ppo.diversity_reward import calculate_mmd_reward
         
         # Create dummy reference features for testing
         dummy_ref_features = np.random.randn(10, 512)

@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from typing import List, Optional, Tuple
-from trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
-from diversity_reward import calculate_mmd_reward
-from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
+from diffusion_ppo.trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
+from diffusion_ppo.diversity_reward import calculate_mmd_reward
+from diffusion_ppo.diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Computing device: {device}")
@@ -113,6 +113,7 @@ class DiffusionReplayMemory:
         self.log_probs.append(log_prob)
         self.done_cap.append(True)  # Always done for diffusion trajectories
     
+    # TODO: batch them as they are generated
     def sample(self):
         """
         Prepare batched trajectory data for PPO training
@@ -153,6 +154,7 @@ class DiffusionRewardFunction:
         self.buffer_size = buffer_size
         self.reward_history = []
     
+    # TODO: should generate a batch and calculate average
     def calculate_reward(self, trajectory: DiffusionTrajectory) -> float:
         """Calculate diversity reward for trajectory"""
         features = extract_features_from_trajectory(trajectory, None)
@@ -215,6 +217,7 @@ class DiffusionPPOAgent:
         self.clip_model, _ = clip.load("ViT-B/32", device=device)
         self.clip_model.eval()
     
+    # TODO: Play with feature sizes
     def get_prompt_features(self, prompt: str) -> np.ndarray:
         """Convert prompt to features (equivalent to state representation)"""
         with torch.no_grad():
