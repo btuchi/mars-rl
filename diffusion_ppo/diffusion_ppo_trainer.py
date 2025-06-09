@@ -1,20 +1,18 @@
+# diffusion_ppo_trainer.py
 import torch
 import numpy as np
 import time
 import os.path
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-
 from diffusion_ppo.trajectory_recording import DiffusionSampler
 from diffusion_ppo_agent import DiffusionPPOAgent
-from log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, REWARD_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
+from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, REWARD_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
 
 # Diffusion PPO Training Parameters (equivalent to vanilla PPO structure)
-NUM_EPISODE = 1000              # Total number of "episodes" (trajectory generations)
-NUM_STEP = 1                    # Each "episode" generates 1 trajectory (unlike Pendulum's 200 steps)
-BATCH_SIZE = 16                 # Mini-batch size for PPO updates
-TRAJECTORY_LENGTH = 32          # Collect this many trajectories before updating
-EPISODES_PER_UPDATE = 32        # Same as TRAJECTORY_LENGTH for diffusion
+NUM_EPISODE = 100              # Total number of "episodes" (trajectory generations)
+BATCH_SIZE = 8                 # Mini-batch size for PPO updates
+EPISODES_PER_UPDATE = 8        # Same as TRAJECTORY_LENGTH for diffusion
 
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -27,34 +25,33 @@ os.makedirs(model_dir, exist_ok=True)
 timestamp = time.strftime("%Y%m%d%H%M%S")
 
 def main():
-    """Main training loop - mirrors vanilla PPO trainer structure exactly"""
+    """main training loop"""
     
     print("=== DIFFUSION PPO TRAINING ===")
     
-    # Load reference features (equivalent to environment setup)
+    # Load reference features
     try:
         ref_features = np.load("reference_crater_features.npy")
         print(f"Loaded reference features: {ref_features.shape}")
     except FileNotFoundError:
         print("Error: reference_crater_features.npy not found!")
-        print("Please ensure you have pre-computed reference features.")
         return
     
-    # Initialize diffusion sampler (equivalent to gym.make())
+    # Initialize diffusion sampler
     print("Initializing diffusion sampler...")
     sampler = DiffusionSampler(device=device)
     
-    # Initialize PPO agent (same as vanilla PPO)
+    # Initialize PPO agent
     feature_dim = ref_features.shape[1] if len(ref_features.shape) > 1 else 512
     agent = DiffusionPPOAgent(
         sampler=sampler,
         ref_features=ref_features,
         batch_size=BATCH_SIZE,
         feature_dim=feature_dim,
-        num_inference_steps=15  # Reduced for faster training
+        num_inference_steps=15
     )
     
-    # Define crater prompts (equivalent to different environment scenarios)
+    # Define crater prompts
     crater_prompts = [
         "a photo of a mars crater",
         "a detailed mars crater with shadows", 
@@ -68,98 +65,83 @@ def main():
         "a weathered mars crater with smooth edges"
     ]
     
-    # Training tracking (same as vanilla PPO)
+    # Training tracking
     REWARD_BUFFER = np.empty(shape=NUM_EPISODE)
     best_reward = -float('inf')
-    
-    # Trajectory collection tracking (same logic as vanilla PPO)
-    trajectories_collected = 0
     episodes_since_update = 0
     recent_rewards = []
     
     print("Starting Diffusion PPO training...")
-    print(f"Target trajectory length: {TRAJECTORY_LENGTH}")
     print(f"Episodes per update: {EPISODES_PER_UPDATE}")
-    print(f"Crater prompts: {len(crater_prompts)}")
+    print(f"Images per episode: 4 (batch generation)")
+    print(f"Total episodes: {NUM_EPISODE}")
     
-    # Main training loop (mirrors vanilla PPO structure exactly)
+    # MAIN TRAINING LOOP
     for episode_i in range(NUM_EPISODE):
+        print(f"\n=== Episode {episode_i+1}/{NUM_EPISODE} ===")
         
-        # "Reset environment" - sample a random prompt
+        # Sample random prompt
         prompt = np.random.choice(crater_prompts)
-        episode_reward = 0
+        print(f"Prompt: '{prompt}'")
         
-        # "Run episode" - for diffusion, this is just 1 step (generate 1 trajectory)
-        for step_i in range(NUM_STEP):
-            
-            # Get "action" (generate trajectory) and value
-            trajectory, log_prob, value, prompt_features = agent.get_action(prompt)
-            
-            # Calculate "reward" from "environment" (diversity function)
-            reward = agent.reward_function.calculate_reward(trajectory)
-            episode_reward += reward
-            
-            # "Step" is always "done" for diffusion (complete generation)
-            done = True
-            
-            # Store experience (same as vanilla PPO)
-            agent.replay_buffer.add_memo(prompt_features, trajectory, reward, value, log_prob)
-            trajectories_collected += 1
+        # Generate batch of images for this prompt
+        trajectories, individual_rewards, avg_reward, prompt_features = agent.generate_batch_for_prompt(
+            agent, prompt, images_per_prompt=4
+        )
         
-        # Track episode (same as vanilla PPO)
+        # Track episode reward (average of batch)
+        episode_reward = avg_reward
         recent_rewards.append(episode_reward)
         episodes_since_update += 1
         REWARD_BUFFER[episode_i] = episode_reward
         
-        # Update policy when we have enough data (same logic as vanilla PPO)
-        if episodes_since_update >= EPISODES_PER_UPDATE or trajectories_collected >= TRAJECTORY_LENGTH:
-            print(f"\nUpdating after {episodes_since_update} episodes ({trajectories_collected} trajectories)")
+        print(f"Episode reward: {episode_reward:.4f}")
+        print(f"Individual rewards: {individual_rewards}")
+        
+        # Update policy when we have enough episodes
+        if episodes_since_update >= EPISODES_PER_UPDATE:
+            print(f"\n🔄 Performing PPO update after {episodes_since_update} episodes...")
+            print(f"Replay buffer size: {len(agent.replay_buffer.trajectories)} trajectories")
             
             # Perform PPO update
             agent.update()
-            
-            # Reset counters
-            trajectories_collected = 0
             episodes_since_update = 0
             
-            # Print progress (same format as vanilla PPO)
+            # Print progress
             if len(ACTOR_LOSS_LOG) > 0:
-                avg_recent_reward = np.mean(recent_rewards[-20:]) if len(recent_rewards) >= 20 else np.mean(recent_rewards)
-                print(f"Ep {episode_i}: Actor Loss: {ACTOR_LOSS_LOG[-1]:.4f}, "
-                      f"Critic Loss: {CRITIC_LOSS_LOG[-1]:.4f}, "
-                      f"Avg Reward(20): {avg_recent_reward:.4f}")
+                avg_recent = np.mean(recent_rewards[-20:]) if len(recent_rewards) >= 20 else np.mean(recent_rewards)
+                print(f"  ✅ Actor Loss: {ACTOR_LOSS_LOG[-1]:.4f}")
+                print(f"  ✅ Critic Loss: {CRITIC_LOSS_LOG[-1]:.4f}")
+                print(f"  ✅ Avg Reward (last 20): {avg_recent:.4f}")
         
-        # Save best model (same as vanilla PPO)
+        # Track best reward
         if episode_reward > best_reward:
             best_reward = episode_reward
             agent.save_policy()
-            print(f"Episode {episode_i}: New best reward: {best_reward:.4f}")
+            print(f"🎉 New best reward: {best_reward:.4f}")
         
         BEST_REWARD_LOG.append(best_reward)
         
-        # Progress logging (same as vanilla PPO)
-        if episode_i % 50 == 0:
-            avg_reward = np.mean(recent_rewards[-50:]) if len(recent_rewards) >= 50 else np.mean(recent_rewards)
-            print(f"Episode {episode_i}: Current: {episode_reward:.4f}, Avg(50): {avg_reward:.4f}, Best: {best_reward:.4f}")
-        
-        # Early stopping if solved (adapted for diversity rewards)
-        if len(recent_rewards) >= 100 and np.mean(recent_rewards[-100:]) > 0.5:  # Adjust threshold as needed
-            print(f"High diversity achieved at episode {episode_i}!")
-            break
+        # Progress logging every 10 episodes
+        if episode_i % 10 == 0 or episode_i == NUM_EPISODE - 1:
+            avg_reward_recent = np.mean(recent_rewards[-10:]) if len(recent_rewards) >= 10 else np.mean(recent_rewards)
+            print(f"📊 Progress - Episode {episode_i}: Current: {episode_reward:.4f}, Avg(10): {avg_reward_recent:.4f}, Best: {best_reward:.4f}")
     
-    # Training completed
-    final_episode = episode_i
-    print(f"\nTraining completed after {final_episode + 1} episodes")
+    # TRAINING COMPLETED (outside the loop!)
+    print(f"\n🏁 Training completed after {NUM_EPISODE} episodes!")
+    final_avg = np.mean(recent_rewards[-20:]) if len(recent_rewards) >= 20 else np.mean(recent_rewards)
+    print(f"Final average reward: {final_avg:.4f}")
+    print(f"Best reward achieved: {best_reward:.4f}")
+    print(f"Total PPO updates: {len(ACTOR_LOSS_LOG)}")
     
-    # Plot training results (same function as vanilla PPO)
-    plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, final_episode)
+    # Plot training results
+    plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, NUM_EPISODE-1)
+
 
 def plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, final_episode=None):
     """
     Plotting function adapted from vanilla PPO but for diffusion metrics
     """
-    import matplotlib.pyplot as plt
-    import numpy as np
     
     # Determine the actual number of episodes run
     if final_episode is not None:
@@ -404,9 +386,9 @@ if __name__ == "__main__":
     main()
     
     # Optionally run testing
-    print("\nWould you like to test the trained model? (y/n)")
-    user_input = input().lower().strip()
-    if user_input in ['y', 'yes']:
-        test_trained_model(num_test_images=3)
+    # print("\nWould you like to test the trained model? (y/n)")
+    # user_input = input().lower().strip()
+    # if user_input in ['y', 'yes']:
+    #     test_trained_model(num_test_images=3)
     
     print("\nDiffusion PPO training and testing completed!")

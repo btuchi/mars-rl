@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
+import clip
 from typing import List, Optional, Tuple
 from diffusion_ppo.trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
-from diffusion_ppo.diversity_reward import calculate_mmd_reward
+from diffusion_ppo.diversity_reward import calculate_mmd_reward, calculate_individual_diversity_rewards
 from diffusion_ppo.diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -146,23 +147,62 @@ class DiffusionReplayMemory:
 
 class DiffusionRewardFunction:
     """
-    Diversity reward function with normalization
-    Replaces the environment reward in vanilla PPO
+    Calculate diversity reward for a batch of trajectories
+    Args:
+        trajectories: List of diffusion trajectories (or single trajectory)
+        batch_size: Number of images to generate for averaging
+        
+    Returns:
+        Average diversity reward across the batch
     """
     def __init__(self, ref_features: np.ndarray, buffer_size: int = 50):
         self.ref_features = ref_features
         self.buffer_size = buffer_size
         self.reward_history = []
     
-    # TODO: should generate a batch and calculate average
-    def calculate_reward(self, trajectory: DiffusionTrajectory) -> float:
-        """Calculate diversity reward for trajectory"""
-        features = extract_features_from_trajectory(trajectory, None)
-        features = features.reshape(1, -1)
+    def calculate_batch_rewards(self, trajectories: List[DiffusionTrajectory]) -> np.ndarray:
+        """
+        Calculate individual diversity rewards for a batch of trajectories
+        Uses your efficient calculate_individual_diversity_rewards function
+        Args:
+            trajectories: List of diffusion trajectories
+        Returns:
+            individual_rewards: Array of rewards for each trajectory
+        """
+        # Extract features from all trajectories
+        batch_features = []
+        for trajectory in trajectories:
+            features = extract_features_from_trajectory(trajectory, None)
+            features = features.reshape(1, -1)  # Ensure 2D
+            batch_features.append(features)
         
-        raw_reward = calculate_mmd_reward(features, self.ref_features)
-        normalized_reward = self.normalize_reward(raw_reward)
-        return normalized_reward
+        # batch_features = [traj_feat1, traj_feat2, traj_feat3, traj_feat4, ... traj_featM]
+        # traj_feat_i = [f1, f2, f3, .., fn] -> one final image
+        # Stack into single np array (batch_size x feature_dim)
+        batch_features_array = np.vstack(batch_features)
+
+        # Calculate Individual Rewards
+        individual_rewards = calculate_individual_diversity_rewards(
+            batch_features_array, 
+            self.ref_features,
+            gamma=None  # Auto-set gamma
+        )
+
+        # Normalize individual rewards
+        normalized_rewards = []
+        for reward in individual_rewards:
+            normalized_reward = self.normalize_reward(reward)
+            normalized_rewards.append(normalized_reward)
+        
+        return np.array(normalized_rewards)
+
+
+    # TODO: should generate a batch and calculate average
+    def calculate_average_batch_reward(self, trajectories: List[DiffusionTrajectory]) -> float:
+        """Calculate average reward for a batch (for episode-level tracking)"""
+
+        individual_rewards = self.calculate_batch_rewards(trajectories)
+        return np.mean(individual_rewards)
     
     def normalize_reward(self, reward: float) -> float:
         """Normalize reward based on running statistics"""
@@ -184,20 +224,23 @@ class DiffusionPPOAgent:
     - Adapted for diffusion trajectory generation
     """
     def __init__(self, sampler: DiffusionSampler, ref_features: np.ndarray, batch_size: int, 
-                 feature_dim: int = 512, num_inference_steps: int = 20):
+                 feature_dim: int = 512, num_inference_steps: int = 20, images_per_prompt: int = 4):
         
         # PPO hyperparameters (same as vanilla PPO)
-        self.VALUE_CLIP = False
-        self.VALUE_CLIP_RANGE = 0.2
+        # self.VALUE_CLIP = False
+        # self.VALUE_CLIP_RANGE = 0.2
         
-        self.LR_ACTOR = 1e-5       # Lower for diffusion models
-        self.LR_CRITIC = 1e-4      # Lower for diffusion models
+        self.LR_ACTOR = 1e-6       # Lower for diffusion models
+        self.LR_CRITIC = 5e-5     # Lower for diffusion models
         
         self.GAMMA = 1.0           # Usually 1.0 for diffusion (reward only at end)
         self.LAMBDA = 0.95         # Same GAE parameter
         
-        self.EPOCH = 4
-        self.EPSILON_CLIP = 0.2
+        self.EPOCH = 2
+        self.EPSILON_CLIP = 0.1
+
+        # Batch settings
+        self.images_per_prompt = images_per_prompt
         
         # Initialize networks
         self.actor = DiffusionPolicyNetwork(sampler, num_inference_steps).to(device)
@@ -205,7 +248,7 @@ class DiffusionPPOAgent:
         self.critic = DiffusionValueNetwork(feature_dim).to(device)
         
         # Optimizers (only optimize UNet, not the whole diffusion pipeline)
-        self.actor_optimizer = optim.AdamW(self.actor.unet.parameters(), lr=self.LR_ACTOR)
+        self.actor_optimizer = optim.AdamW(self.actor.unet.parameters(), lr=self.LR_ACTOR, weight_decay=1e-4)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.LR_CRITIC)
         
         # Components
@@ -213,7 +256,6 @@ class DiffusionPPOAgent:
         self.reward_function = DiffusionRewardFunction(ref_features)
         
         # For text embeddings (simple approach - could be improved)
-        import clip
         self.clip_model, _ = clip.load("ViT-B/32", device=device)
         self.clip_model.eval()
     
@@ -226,22 +268,45 @@ class DiffusionPPOAgent:
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         return text_features.cpu().numpy().flatten()
     
-    def get_action(self, prompt: str) -> Tuple[DiffusionTrajectory, float]:
+    def generate_batch_for_prompt(self, prompt: str) -> Tuple[List[DiffusionTrajectory], np.ndarray, float, np.ndarray]:
         """
-        Generate trajectory and value for prompt
-        Equivalent to get_action in vanilla PPO
+        Generate a batch of images for a single prompt and calculate individual rewards
+        
+        Returns:
+            trajectories: List of generated trajectories
+            individual_rewards: Individual diversity reward for each trajectory
+            avg_reward: Average reward for episode tracking
+            prompt_features: Prompt feature representation
         """
-        # Get prompt features for value estimation
+        # Get prompt features and value (same for all images from this prompt)
         prompt_features = self.get_prompt_features(prompt)
         prompt_features_tensor = torch.FloatTensor(prompt_features).unsqueeze(0).to(device)
+        value = self.critic(prompt_features_tensor).detach().cpu().numpy()[0][0]
         
-        # Generate trajectory (equivalent to action sampling)
-        trajectory, log_prob = self.actor.select_trajectory(prompt)
+        # Generate batch of trajectories
+        trajectories = []
+        log_probs = []
         
-        # Get value estimate
-        value = self.critic(prompt_features_tensor)
+        print(f"Generating {self.images_per_prompt} images for prompt: '{prompt}'")
+        for i in range(self.images_per_prompt):
+            trajectory, log_prob = self.actor.select_trajectory(prompt)
+            trajectories.append(trajectory)
+            log_probs.append(log_prob.item() if torch.is_tensor(log_prob) else log_prob)
+            print(f"  Image {i+1}/{self.images_per_prompt} generated")
         
-        return trajectory, log_prob.item(), value.detach().cpu().numpy()[0][0], prompt_features
+        # Calculate individual diversity rewards using your efficient function
+        individual_rewards = self.reward_function.calculate_batch_rewards(trajectories)
+        avg_reward = np.mean(individual_rewards)
+        
+        print(f"  Individual rewards: {individual_rewards}")
+        print(f"  Average reward: {avg_reward:.4f}")
+        
+        # Store each trajectory with its individual reward
+        for i, (trajectory, log_prob, reward) in enumerate(zip(trajectories, log_probs, individual_rewards)):
+            self.replay_buffer.add_memo(prompt_features, trajectory, reward, value, log_prob)
+        
+        return trajectories, individual_rewards, avg_reward, prompt_features
+    
     
     def compute_gae(self, rewards, values, dones):
         """
