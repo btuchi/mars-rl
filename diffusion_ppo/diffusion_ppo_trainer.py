@@ -85,9 +85,7 @@ def main():
         print(f"Prompt: '{prompt}'")
         
         # Generate batch of images for this prompt
-        trajectories, individual_rewards, avg_reward, prompt_features = agent.generate_batch_for_prompt(
-            agent, prompt, images_per_prompt=4
-        )
+        trajectories, individual_rewards, avg_reward, prompt_features = agent.generate_batch_for_prompt(prompt)
         
         # Track episode reward (average of batch)
         episode_reward = avg_reward
@@ -126,6 +124,10 @@ def main():
         if episode_i % 10 == 0 or episode_i == NUM_EPISODE - 1:
             avg_reward_recent = np.mean(recent_rewards[-10:]) if len(recent_rewards) >= 10 else np.mean(recent_rewards)
             print(f"📊 Progress - Episode {episode_i}: Current: {episode_reward:.4f}, Avg(10): {avg_reward_recent:.4f}, Best: {best_reward:.4f}")
+        
+        # Clear GPU memory
+        if episode_i % 10 == 0:
+            torch.cuda.empty_cache()
     
     # TRAINING COMPLETED (outside the loop!)
     print(f"\n🏁 Training completed after {NUM_EPISODE} episodes!")
@@ -258,7 +260,7 @@ def plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST
         axs[1, 2].set_ylabel("Average Diversity Reward")
         axs[1, 2].legend()
         axs[1, 2].grid(True, alpha=0.3)
-        
+
         # Show improvement
         if len(rolling_avg) > window:
             early_avg = np.mean(rolling_avg[:window])
@@ -342,15 +344,14 @@ def test_trained_model(num_test_images: int = 5):
         print(f"\nTest {i+1}: '{prompt}'")
         
         # Generate image
-        trajectory, log_prob, value, prompt_features = agent.get_action(prompt)
+        trajectories, _, _, prompt_features = agent.generate_batch_for_prompt(prompt)
+        trajectory = trajectories[0]  # Use first trajectory
         
         # Calculate diversity reward
         reward = agent.reward_function.calculate_reward(trajectory)
         test_rewards.append(reward)
         
         print(f"  Diversity reward: {reward:.4f}")
-        print(f"  Value prediction: {value:.4f}")
-        print(f"  Log probability: {log_prob:.4f}")
         
         # Save test image
         try:
