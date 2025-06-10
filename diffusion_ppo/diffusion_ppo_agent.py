@@ -44,6 +44,10 @@ class DiffusionPolicyNetwork(nn.Module):
     def calculate_log_prob(self, trajectory: DiffusionTrajectory) -> torch.Tensor:
         """
         Calculate log probability of trajectory (equivalent to action log prob)
+        Arg:
+            - A diffusion trajectory
+        Return
+            - the log probability this trajectory happens to generate images
         """
         log_probs = []
 
@@ -55,7 +59,14 @@ class DiffusionPolicyNetwork(nn.Module):
         return torch.stack(log_probs).sum()
     
     def select_trajectory(self, prompt: str) -> Tuple[DiffusionTrajectory, torch.Tensor]:
-        """Sample trajectory with log prob (equivalent to select_action)"""
+        """
+        Sample trajectory with log prob (equivalent to select_action)
+        Arg:
+            - prompt
+        Return
+            - a diffusion trajectory
+            - its log probability
+        """
         with torch.no_grad():
             trajectory = self.forward(prompt)
             log_prob = self.calculate_log_prob(trajectory)
@@ -102,7 +113,6 @@ class DiffusionReplayMemory:
         self.rewards = []             # Diversity rewards
         self.values = []              # Value predictions
         self.log_probs = []          # Log probabilities of trajectories
-        self.done_cap = []           # Always True for diffusion (complete generations)
         self.BATCH_SIZE = batch_size
     
     def add_memo(self, prompt_features, trajectory, reward, value, log_prob):

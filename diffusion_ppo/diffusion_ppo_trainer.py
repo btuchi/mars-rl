@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 from diffusion_ppo.trajectory_recording import DiffusionSampler
 from diffusion_ppo_agent import DiffusionPPOAgent
 from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, REWARD_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
+from PIL import Image
+import torchvision.transforms as transforms
 
 # Diffusion PPO Training Parameters (equivalent to vanilla PPO structure)
 NUM_EPISODE = 100              # Total number of "episodes" (trajectory generations)
@@ -355,8 +357,7 @@ def test_trained_model(num_test_images: int = 5):
         
         # Save test image
         try:
-            from PIL import Image
-            import torchvision.transforms as transforms
+            
             
             final_image = trajectory.final_image.squeeze(0).cpu()
             final_image = torch.clamp(final_image, 0, 1)

@@ -1,12 +1,10 @@
 import numpy as np
 import torch
-from sklearn.metrics.pairwise import polynomial_kernel
-from sklearn.metrics.pairwise import rbf_kernel
+from sklearn.metrics.pairwise import polynomial_kernel, rbf_kernel
 
 def calculate_mmd_reward(generated_features, reference_features, gamma=None):
     """Helper function to calculate MMD reward from pre-computed features"""
     # This is just the core of your existing function
-    from sklearn.metrics.pairwise import rbf_kernel
     
     K_XX = rbf_kernel(generated_features, generated_features, gamma=gamma)
     K_YY = rbf_kernel(reference_features, reference_features, gamma=gamma)
