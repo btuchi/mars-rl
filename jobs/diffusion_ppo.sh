@@ -4,7 +4,7 @@
 #SBATCH -p GPU-shared                    # Use the GPU-shared partition
 #SBATCH -t 2:00:00                      # Job time limit: 2 hours
 #SBATCH --gres=gpu:1                    # Request 1 GPU
-#SBATCH --mem=32G                       # Request 32GB of memory
+#SBATCH --mem=22G                       # Request 22GB of memory (under 22.75GB limit)
 #SBATCH -A eng240004p                    # Charge time to your PSC allocation
 #SBATCH --mail-user=btuchi@g.hmc.edu     # Email for job updates
 #SBATCH --mail-type=END,FAIL             # Email on job completion or failure
