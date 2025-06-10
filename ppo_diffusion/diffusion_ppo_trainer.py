@@ -5,7 +5,7 @@ import time
 import os.path
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from diffusion_ppo.trajectory_recording import DiffusionSampler
+from ppo_diffusion.trajectory_recording import DiffusionSampler
 from diffusion_ppo_agent import DiffusionPPOAgent
 from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, REWARD_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
 from PIL import Image

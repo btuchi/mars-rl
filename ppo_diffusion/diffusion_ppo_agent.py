@@ -4,9 +4,9 @@ import torch.optim as optim
 import numpy as np
 import clip
 from typing import List, Optional, Tuple
-from diffusion_ppo.trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
-from diffusion_ppo.diversity_reward import calculate_mmd_reward, calculate_individual_diversity_rewards
-from diffusion_ppo.diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
+from ppo_diffusion.trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
+from ppo_diffusion.diversity_reward import calculate_mmd_reward, calculate_individual_diversity_rewards
+from ppo_diffusion.diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Computing device: {device}")
