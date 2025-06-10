@@ -5,7 +5,7 @@ import time
 import os.path
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from ppo_diffusion.trajectory_recording import DiffusionSampler
+from trajectory_recording import DiffusionSampler
 from diffusion_ppo_agent import DiffusionPPOAgent
 from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, REWARD_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
 from PIL import Image
@@ -32,11 +32,24 @@ def main():
     print("=== DIFFUSION PPO TRAINING ===")
     
     # Load reference features
+    # Load reference features
     try:
-        ref_features = np.load("reference_crater_features.npy")
-        print(f"Loaded reference features: {ref_features.shape}")
+        npz_data = np.load("reference_crater_features.npz")
+        array_keys = list(npz_data.keys())
+        
+        # Stack all individual feature vectors into a single array
+        ref_features_list = []
+        for key in array_keys:
+            ref_features_list.append(npz_data[key])
+        
+        ref_features = np.stack(ref_features_list)
+        print(f"Loaded reference features for testing: {ref_features.shape}")
+        npz_data.close()
     except FileNotFoundError:
-        print("Error: reference_crater_features.npy not found!")
+        print("Error: Cannot test without reference features!")
+        return
+    except Exception as e:
+        print(f"Error loading reference features: {e}")
         return
     
     # Initialize diffusion sampler
