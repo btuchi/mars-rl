@@ -61,15 +61,16 @@ class DiffusionPolicyNetwork(nn.Module):
     def select_trajectory(self, prompt: str) -> Tuple[DiffusionTrajectory, torch.Tensor]:
         """
         Sample trajectory with log prob (equivalent to select_action)
+        disabled torch.no_grad() to enable gradient flow for training
         Arg:
             - prompt
         Return
             - a diffusion trajectory
             - its log probability
+        
         """
-        with torch.no_grad():
-            trajectory = self.forward(prompt)
-            log_prob = self.calculate_log_prob(trajectory)
+        trajectory = self.forward(prompt)
+        log_prob = self.calculate_log_prob(trajectory)
         return trajectory, log_prob
 
 
@@ -109,16 +110,18 @@ class DiffusionReplayMemory:
     """
     def __init__(self, batch_size):
         self.prompt_features = []      # "States" - text prompt features
+        self.prompts = []               # Store actual prompts for regeneration
         self.trajectories = []         # "Actions" - complete diffusion trajectories  
         self.rewards = []             # Diversity rewards
         self.values = []              # Value predictions
         self.log_probs = []          # Log probabilities of trajectories
         self.BATCH_SIZE = batch_size
     
-    def add_memo(self, prompt_features, trajectory, reward, value, log_prob):
+    def add_memo(self, prompt_features, prompt, trajectory, reward, value, log_prob):
         """Add a trajectory experience (equivalent to add_memo in vanilla PPO)"""
         self.prompt_features.append(prompt_features)
         self.trajectories.append(trajectory)
+        self.prompts.append(prompt)  # Store the actual prompt
         self.rewards.append(reward)
         self.values.append(value)
         self.log_probs.append(log_prob)
@@ -137,6 +140,7 @@ class DiffusionReplayMemory:
         batches = [sample_indices[i:i+self.BATCH_SIZE] for i in batch_start_points]
         
         return (np.array(self.prompt_features),     # "states"
+                self.prompts,
                 self.trajectories,                  # "actions" 
                 np.array(self.rewards),            # rewards
                 np.array(self.values),             # values
@@ -287,7 +291,7 @@ class DiffusionPPOAgent:
         for i in range(self.images_per_prompt):
             trajectory, log_prob = self.actor.select_trajectory(prompt)
             trajectories.append(trajectory)
-            log_probs.append(log_prob.item() if torch.is_tensor(log_prob) else log_prob)
+            log_probs.append(log_prob if torch.is_tensor(log_prob) else torch.tensor(log_prob))
             print(f"  Image {i+1}/{self.images_per_prompt} generated")
         
         # Calculate individual diversity rewards using your efficient function
@@ -304,7 +308,7 @@ class DiffusionPPOAgent:
         return trajectories, individual_rewards, avg_reward, prompt_features
     
     
-    def compute_gae(self, rewards, values, dones):
+    def compute_gae(self, rewards, values):
         """
         GAE computation for diffusion models
         Simplified since each trajectory is independent
@@ -340,13 +344,13 @@ class DiffusionPPOAgent:
         self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
         
         # Get trajectory data
-        memo_features, memo_trajectories, memo_rewards, memo_values, memo_dones, memo_log_probs, batches = self.replay_buffer.sample()
+        memo_features, memo_prompts, memo_trajectories, memo_rewards, memo_values, memo_log_probs, batches = self.replay_buffer.sample()
         
         # Convert log_probs to numpy array
         memo_log_probs_array = np.array([lp.item() if torch.is_tensor(lp) else lp for lp in memo_log_probs])
-        
+
         # Compute advantages using GAE
-        memo_advantages = self.compute_gae(memo_rewards, memo_values, memo_dones)
+        memo_advantages = self.compute_gae(memo_rewards, memo_values)
         
         # Normalize advantages
         memo_advantages = (memo_advantages - memo_advantages.mean()) / (memo_advantages.std() + 1e-8)
@@ -358,7 +362,7 @@ class DiffusionPPOAgent:
         memo_features_tensor = torch.FloatTensor(memo_features).to(device)
         memo_advantages_tensor = torch.tensor(memo_advantages, dtype=torch.float32).to(device)
         memo_returns_tensor = torch.tensor(memo_returns, dtype=torch.float32).to(device)
-        memo_old_log_probs_tensor = torch.tensor(memo_log_probs_array, dtype=torch.float32).to(device)
+        # memo_old_log_probs_tensor = torch.tensor(memo_log_probs_array, dtype=torch.float32).to(device)
         
         # Get old policy log probabilities (frozen)
         with torch.no_grad():
@@ -380,9 +384,14 @@ class DiffusionPPOAgent:
                 
                 # Current policy log probabilities
                 current_log_probs = []
+
+                print(f"  Regenerating {len(batch)} trajectories for gradient computation...")
                 for idx in batch:
-                    traj = memo_trajectories[idx]
-                    current_log_prob = self.actor.calculate_log_prob(traj)
+                    prompt = memo_prompts[idx]  # Use the stored prompt
+                    
+                    # Generate new trajectory with current policy (gradients enabled)
+                    trajectory = self.actor.forward(prompt)
+                    current_log_prob = self.actor.calculate_log_prob(trajectory)
                     current_log_probs.append(current_log_prob)
                 
                 current_log_probs_tensor = torch.stack(current_log_probs)

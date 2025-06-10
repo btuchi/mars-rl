@@ -32,9 +32,8 @@ def main():
     print("=== DIFFUSION PPO TRAINING ===")
     
     # Load reference features
-    # Load reference features
     try:
-        npz_data = np.load("reference_crater_features.npz")
+        npz_data = np.load("ppo_diffusion/reference_crater_features.npz")
         array_keys = list(npz_data.keys())
         
         # Stack all individual feature vectors into a single array
