@@ -29,9 +29,8 @@ Once synthetic images are generated, we extract features from them too and compa
 
 ### 🔹 Step 3: Diversity Reward Function
 
-We implement two reward functions:
+We implement MMD (Maximum Mean Discrepancy) as our reward function:
 - **MMD (Maximum Mean Discrepancy)**: measures how closely the generated feature distribution matches the reference distribution.
-- **GP-MI (Gaussian Process Mutual Information)**: captures mutual coverage between generated and reference features.
 
 We validate the reward by testing known datasets with increasing diversity levels (e.g., all identical → highly varied craters), and check if the reward increases accordingly.
 
@@ -49,10 +48,9 @@ This tells us which individual images contribute most to the overall diversity. 
 
 We modify the diffusion sampler to record **trajectories** — the full sequence of denoising steps taken to generate each image.
 
-Then we apply **policy gradient RL**:
+Then we apply **Proximal Policy Optimization (PPO) RL**:
 - Good (diverse) images get higher reward → increase likelihood of those denoising steps
 - Low-reward images → discourage similar actions
-- Loss: `-log(probability of trajectory) × reward`
 
 To stabilize training, we plan to use:
 - **Trust region constraints** to limit drastic model updates
@@ -65,9 +63,8 @@ We build a full training loop that:
 - Computes rewards
 - Logs reward values over time
 - Saves model checkpoints
-- Uses evaluation metrics like FID, Precision, and Recall to monitor diversity
 
-### 🔹 Step 7: Evaluation System
+### 🔹 Step 7: Evaluation System (TBD)
 
 To assess improvement, we compute:
 - **Quantitative metrics**: FID, Precision, Recall, KL divergence, MMD
@@ -76,41 +73,15 @@ To assess improvement, we compute:
 
 This evaluation confirms if the model is learning to generate **diverse, high-quality crater images** aligned with scientific variability observed in real Martian terrain.
 
-
-## 🧱 Directory Structure
-
-```
-
-RL/
-│
-├── by\_size/, by\_lighting/, generated\_craters/, real\_craters/, reference\_images/
-│   └── Image subfolders grouped by crater characteristics
-│
-├── tests/
-│   ├── simple\_test.py              # Quick end-to-end test of model + reward pipeline
-│   └── test\_trajectory\_recording.py
-│
-├── trajectory\_recording.py        # Sampling logic with step-by-step logging for RL
-├── diversity\_reward.py            # MMD-based reward calculation
-├── build\_reference\_images.ipynb   # Notebook for collecting and grouping reference data
-├── diversity\_reward\_MMD.ipynb     # Notebook for testing MMD and other reward functions
-├── feature\_extraction.ipynb       # Notebook for extracting CLIP features
-├── reference\_clip\_features.npz    # Saved CLIP features of reference images
-│
-├── simple\_test.sh                 # SLURM script to run simple\_test.py on Bridges2
-├── clean\_up\_bridges2.sh           # Sync and overwrite Bridges2 files
-├── sync\_to\_bridges2.sh            # rsync project to PSC
-
-````
-
 ## ✅ Current Progress
 
 - ✅ Set up trajectory recorder to log all denoising steps and actions.
 - ✅ Verified GPU-enabled Stable Diffusion sampling on Bridges2.
 - ✅ Extracted CLIP-based features from generated images.
 - ✅ Implemented and tested MMD reward function using synthetic and real feature vectors.
-- ✅ Conducted full pipeline smoke test (`simple_test.py`) — **passed on GPU node**.
-- 🔜 Next: Do more testing on the trajectory recording pipeline. Implement training loop with policy gradient updates using recorded trajectories.
+- ✅ Implemented and tested diffusion trajectory recording pipeline.
+- ✅ Implemented and Agent (`diffusion_ppo_agent.py`) and Trainer (`diffusion_ppo_trainer.py`) to perform PPO.
+- ▶️ Currently debugging and testing the Agent and the Trainer.
 
 ## 📦 Dependencies
 
@@ -119,13 +90,6 @@ RL/
 - `numpy`, `PIL`, `clip-by-openai`
 - GPU (V100 or H100 preferred)
 - Optional: SLURM + Conda for HPC (Bridges2)
-
-## 🧪 Running Tests
-
-To run a quick end-to-end test:
-```bash
-sbatch simple_test.sh
-````
 
 Output includes:
 
@@ -137,5 +101,6 @@ Output includes:
 ## 📬 Contact
 
 Maintained by **Bryce Tu Chi**
-Email: [btuchi@g.hmc.edu](mailto:brycetuchi@gmail.com)
+Instructor: Dr. Adyasha Mohanty
+Email: [brycetuchi@gmail.com](mailto:brycetuchi@gmail.com)
 
