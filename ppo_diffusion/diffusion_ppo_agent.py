@@ -150,6 +150,7 @@ class DiffusionReplayMemory:
     def clear_memo(self):
         """Clear all stored trajectories"""
         self.prompt_features = []
+        self.prompts = []
         self.trajectories = []
         self.rewards = []
         self.values = []
@@ -291,7 +292,7 @@ class DiffusionPPOAgent:
         for i in range(self.images_per_prompt):
             trajectory, log_prob = self.actor.select_trajectory(prompt)
             trajectories.append(trajectory)
-            log_probs.append(log_prob if torch.is_tensor(log_prob) else torch.tensor(log_prob))
+            log_probs.append(log_prob.item() if torch.is_tensor(log_prob) else log_prob)
             print(f"  Image {i+1}/{self.images_per_prompt} generated")
         
         # Calculate individual diversity rewards using your efficient function
@@ -301,9 +302,17 @@ class DiffusionPPOAgent:
         print(f"  Individual rewards: {individual_rewards}")
         print(f"  Average reward: {avg_reward:.4f}")
         
-        # Store each trajectory with its individual reward
+        # Store each trajectory with its individual reward - UPDATED to include prompt
         for i, (trajectory, log_prob, reward) in enumerate(zip(trajectories, log_probs, individual_rewards)):
-            self.replay_buffer.add_memo(prompt_features, trajectory, reward, value, log_prob)
+            self.replay_buffer.add_memo(
+                prompt_features,    # features
+                prompt,            # NEW: store the actual prompt
+                trajectory,        # trajectory
+                reward,           # reward
+                value,            # value
+                log_prob          # log_prob
+            )
+    
         
         return trajectories, individual_rewards, avg_reward, prompt_features
     
