@@ -100,7 +100,7 @@ Output includes:
 
 ## 📬 Contact
 
-Maintained by **Bryce Tu Chi**
-Instructor: Dr. Adyasha Mohanty
-Email: [brycetuchi@gmail.com](mailto:brycetuchi@gmail.com)
+- Maintained by **Bryce Tu Chi** ([brycetuchi@gmail.com](mailto:brycetuchi@gmail.com))
+- Instructor: Dr. Adyasha Mohanty
+
 
