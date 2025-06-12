@@ -10,10 +10,10 @@
 #SBATCH --output=traj_full_test_output.txt
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export RL=/jet/home/btuchi/BRYCE/RL      # Set path to your RL project directory
+export RL=/ocean/projects/eng240004p/btuchi/BRYCE/RL      # Set path to your RL project directory
 
 # Activate your virtual environment
-source /jet/home/btuchi/BRYCE/RL/rl_env/bin/activate
+source /ocean/projects/eng240004p/btuchi/BRYCE/RL/rl_env/bin/activate
 if [ $? -ne 0 ]; then
     echo "Failed to activate virtual environment"
     exit 1
@@ -27,4 +27,4 @@ nvidia-smi || echo "nvidia-smi failed — no GPU visible"
 
 # Run test
 echo "Running test..."
-python /jet/home/btuchi/BRYCE/RL/tests/traj_recording_test_memory.py
+python /ocean/projects/eng240004p/btuchi/BRYCE/RL/tests/traj_recording_test_memory.py

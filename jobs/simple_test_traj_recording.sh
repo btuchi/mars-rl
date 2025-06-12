@@ -9,7 +9,7 @@
 #SBATCH --mail-type=END,FAIL             # Email on job completion or failure
 #SBATCH --output=simple_traj_test_output.txt
 
-export RL=/jet/home/btuchi/BRYCE/RL      # Set path to your RL project directory
+export RL=/ocean/projects/eng240004p/btuchi/BRYCE/RL      # Set path to your RL project directory
 
 # Activate your virtual environment
 source /jet/home/btuchi/BRYCE/RL/rl_env/bin/activate
@@ -26,4 +26,4 @@ nvidia-smi || echo "nvidia-smi failed — no GPU visible"
 
 # Run test
 echo "Running test..."
-python /jet/home/btuchi/BRYCE/RL/tests/simple_test_traj_recording.py
+python /ocean/projects/eng240004p/btuchi/BRYCE/RL/tests/simple_test_traj_recording.py

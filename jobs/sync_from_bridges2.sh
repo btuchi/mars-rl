@@ -5,7 +5,7 @@
 # Configuration - MODIFY THESE VARIABLES
 BRIDGES2_USER="btuchi"                                    # Your Bridges-2 username
 BRIDGES2_HOST="bridges2.psc.edu"                        # Bridges-2 hostname
-REMOTE_DIR="/jet/home/btuchi/BRYCE/RL/"                 # Remote directory on Bridges-2
+REMOTE_DIR="/ocean/projects/eng240004p/btuchi/BRYCE/RL/"                 # Remote directory on Bridges-2
 LOCAL_DIR="/Users/bryce2hua/Desktop/RL"                 # FIXED: Always sync to this directory
 
 # Rsync options explanation:
@@ -44,7 +44,7 @@ rsync -avzhP --update \
     --include="plots/" \
     --include="plots/**" \
     --exclude="*" \
-    "${BRIDGES2_USER}@${BRIDGES2_HOST}:/jet/home/btuchi/BRYCE/RL/ppo_diffusion/" "${LOCAL_DIR}/ppo_diffusion/"
+    "${BRIDGES2_USER}@${BRIDGES2_HOST}:/ocean/projects/eng240004p/btuchi/BRYCE/RL/ppo_diffusion/" "${LOCAL_DIR}/ppo_diffusion/"
 
 if [ $? -eq 0 ]; then 
     SYNC_SUCCESS=3
