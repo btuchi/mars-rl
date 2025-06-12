@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import clip
+import os.path
 from typing import List, Optional, Tuple
 from trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
 from diversity_reward import calculate_individual_diversity_rewards
@@ -279,21 +280,53 @@ class DiffusionPPOAgent:
             avg_reward: Average reward for episode tracking
             prompt_features: Prompt feature representation
         """
+
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+
         # Get prompt features and value (same for all images from this prompt)
         prompt_features = self.get_prompt_features(prompt)
+
+        # Clear immediately after getting features
+        torch.cuda.empty_cache()
+
         prompt_features_tensor = torch.FloatTensor(prompt_features).unsqueeze(0).to(device)
         value = self.critic(prompt_features_tensor).detach().cpu().numpy()[0][0]
-        
+
+        # Clean up prompt tensor
+        del prompt_features_tensor
+        torch.cuda.empty_cache()
+            
         # Generate batch of trajectories
         trajectories = []
         log_probs = []
         
         print(f"Generating {self.images_per_prompt} images for prompt: '{prompt}'")
         for i in range(self.images_per_prompt):
+
+            # Clear cache before each generation
+            torch.cuda.empty_cache()
+            gc.collect()
+
             trajectory, log_prob = self.actor.select_trajectory(prompt)
             trajectories.append(trajectory)
             log_probs.append(log_prob.item() if torch.is_tensor(log_prob) else log_prob)
+
             print(f"  Image {i+1}/{self.images_per_prompt} generated")
+
+            # Clean up trajectory steps to save memory (but keep the trajectory object)
+            if hasattr(trajectory, 'steps'):
+                for step in trajectory.steps:
+                    # Clear intermediate tensors but keep essential data
+                    if hasattr(step, 'state'):
+                        step.state = None  # Clear intermediate states
+                    if hasattr(step, 'noise_pred'):
+                        step.noise_pred = None  # Clear noise predictions
+            
+            torch.cuda.empty_cache()
+            gc.collect()
+            
         
         # Calculate individual diversity rewards using your efficient function
         individual_rewards = self.reward_function.calculate_batch_rewards(trajectories)
@@ -306,7 +339,7 @@ class DiffusionPPOAgent:
         for i, (trajectory, log_prob, reward) in enumerate(zip(trajectories, log_probs, individual_rewards)):
             self.replay_buffer.add_memo(
                 prompt_features,    # features
-                prompt,            # NEW: store the actual prompt
+                prompt,            # store the actual prompt
                 trajectory,        # trajectory
                 reward,           # reward
                 value,            # value
@@ -459,5 +492,8 @@ class DiffusionPPOAgent:
     
     def save_policy(self):
         """Save the trained policy (UNet weights)"""
-        torch.save(self.actor.unet.state_dict(), "diffusion_ppo_policy.pth")
-        print("Diffusion PPO policy saved!")
+        models_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "models")
+        os.makedirs(models_dir, exist_ok=True)
+        policy_path = os.path.join(models_dir, "diffusion_ppo_policy.pth")
+        torch.save(self.actor.unet.state_dict(), policy_path)
+        print(f"Diffusion PPO policy saved to: {policy_path}")

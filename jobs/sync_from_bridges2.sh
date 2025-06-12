@@ -24,38 +24,51 @@ if [ ! -d "${LOCAL_DIR}" ]; then
 fi
 
 echo "========================================"
-echo "Syncing files from Bridges-2 to local"
+echo "Syncing TRAINING RESULTS from Bridges-2 to local"
 echo "========================================"
 echo "Remote: ${BRIDGES2_USER}@${BRIDGES2_HOST}:${REMOTE_DIR}"
 echo "Local:  ${LOCAL_DIR}"
 echo "Current working directory: $(pwd)"
 echo ""
 
-# Perform the sync
-rsync -avzhP --update \
-    --exclude='*.pyc' \
-    --exclude='__pycache__/' \
-    --exclude='.git/' \
-    --exclude='*.log' \
-    --exclude='slurm-*.out' \
-    --exclude='core.*' \
-    --exclude='*.tmp' \
-    "${BRIDGES2_USER}@${BRIDGES2_HOST}:${REMOTE_DIR}" \
-    "${LOCAL_DIR}"
+# Initialize success counter
+SYNC_SUCCESS=0
 
-# Check if rsync was successful
-if [ $? -eq 0 ]; then
+# Sync all three folders in one command (single password prompt)
+echo "📦 Syncing all training results folders..."
+rsync -avzhP --update \
+    --include="outputs/" \
+    --include="outputs/**" \
+    --include="models/" \
+    --include="models/**" \
+    --include="plots/" \
+    --include="plots/**" \
+    --exclude="*" \
+    "${BRIDGES2_USER}@${BRIDGES2_HOST}:/jet/home/btuchi/BRYCE/RL/ppo_diffusion/" "${LOCAL_DIR}/ppo_diffusion/"
+
+if [ $? -eq 0 ]; then 
+    SYNC_SUCCESS=3
+    echo "✅ All folders synced successfully!"
+else
+    echo "❌ Sync failed"
+fi
+
+# Check if all syncs were successful
+if [ $SYNC_SUCCESS -eq 3 ]; then
     echo ""
-    echo "✅ Sync completed successfully!"
+    echo "✅ All syncs completed successfully!"
     echo ""
-    echo "Files synced to: ${LOCAL_DIR}"
-    echo "You can now run: ls -la to see the synced files"
+    echo "Files synced to: ${LOCAL_DIR}/ppo_diffusion/"
+    echo "  📄 Job outputs: outputs/"
+    echo "  🏗️ Model weights: models/"  
+    echo "  📊 Training plots: plots/"
 else
     echo ""
-    echo "❌ Sync failed. Please check:"
+    echo "⚠️ Some syncs may have failed ($SYNC_SUCCESS/3 successful)"
+    echo "Please check:"
     echo "  1. Your Bridges-2 credentials"
     echo "  2. Network connection"
-    echo "  3. Remote directory path"
+    echo "  3. Remote directory paths exist"
     echo "  4. Local directory permissions"
 fi
 

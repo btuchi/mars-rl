@@ -41,7 +41,7 @@ class DiffusionSampler:
         self.device = device
         
         # Add memory optimization
-        # torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
         # Load Stable Diffusion pipeline
         self.pipe = StableDiffusionPipeline.from_pretrained(
@@ -51,8 +51,12 @@ class DiffusionSampler:
             requires_safety_checker=False
         ).to(device)
 
-        # # Enable memory efficient attention
-        # self.pipe.enable_attention_slicing()
+        # Enable memory efficient attention
+        self.pipe.enable_attention_slicing("max")       # Maximum slicing
+        self.pipe.enable_model_cpu_offload()           # CPU offload
+        self.pipe.enable_vae_slicing()                 # VAE slicing
+        self.pipe.enable_vae_tiling()                  # VAE tiling
+        self.pipe.enable_sequential_cpu_offload()     # Sequential offload (most aggressive)
         
         # Extract components we need
         self.unet = self.pipe.unet
@@ -61,8 +65,10 @@ class DiffusionSampler:
         self.text_encoder = self.pipe.text_encoder
         self.tokenizer = self.pipe.tokenizer
         
-        # Set up for training
+        # Keep UNet in training mode but others in eval
         self.unet.train()
+        self.vae.eval()
+        self.text_encoder.eval()
         
     def encode_prompt(self, prompt: str, batch_size: int = 1) -> torch.Tensor:
         """

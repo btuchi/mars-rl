@@ -23,7 +23,15 @@ print(f"Computing device: {device}")
 # Directory setup
 current_path = os.path.dirname(os.path.realpath(__file__))
 model_dir = os.path.join(current_path, "models")
+plots_dir = os.path.join(current_path, "plots")
+
+# Create all directories
 os.makedirs(model_dir, exist_ok=True)
+os.makedirs(plots_dir, exist_ok=True)
+
+current_path = os.path.dirname(os.path.realpath(__file__))
+model_dir = os.path.join(current_path, "models")
+
 timestamp = time.strftime("%Y%m%d%H%M%S")
 
 def main():
@@ -291,7 +299,8 @@ def plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST
     plt.tight_layout()
     
     # Save plot
-    plot_path = os.path.join(model_dir, f"diffusion_ppo_training_{timestamp}.png")
+    plots_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "plots")
+    plot_path = os.path.join(plots_dir, f"diffusion_ppo_training_{timestamp}.png")
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.show()
     
@@ -307,93 +316,93 @@ def plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST
         print(f"Final UNet loss: {ACTOR_LOSS_LOG[-1]:.6f}")
         print(f"Final value loss: {CRITIC_LOSS_LOG[-1]:.6f}")
 
-def test_trained_model(num_test_images: int = 5):
-    """
-    Test the trained diffusion model
-    Generate diverse crater images and evaluate them
-    """
-    print(f"\n=== TESTING TRAINED DIFFUSION MODEL ===")
+# def test_trained_model(num_test_images: int = 5):
+#     """
+#     Test the trained diffusion model
+#     Generate diverse crater images and evaluate them
+#     """
+#     print(f"\n=== TESTING TRAINED DIFFUSION MODEL ===")
     
-    # Load reference features
-    try:
-        ref_features = np.load("reference_crater_features.npy")
-        print(f"Loaded reference features for testing: {ref_features.shape}")
-    except FileNotFoundError:
-        print("Error: Cannot test without reference features!")
-        return
+#     # Load reference features
+#     try:
+#         ref_features = np.load("reference_crater_features.npy")
+#         print(f"Loaded reference features for testing: {ref_features.shape}")
+#     except FileNotFoundError:
+#         print("Error: Cannot test without reference features!")
+#         return
     
-    # Initialize components
-    sampler = DiffusionSampler(device=device)
-    feature_dim = ref_features.shape[1] if len(ref_features.shape) > 1 else 512
+#     # Initialize components
+#     sampler = DiffusionSampler(device=device)
+#     feature_dim = ref_features.shape[1] if len(ref_features.shape) > 1 else 512
     
-    agent = DiffusionPPOAgent(
-        sampler=sampler,
-        ref_features=ref_features,
-        batch_size=1,  # Single trajectory for testing
-        feature_dim=feature_dim,
-        num_inference_steps=20  # More steps for higher quality
-    )
+#     agent = DiffusionPPOAgent(
+#         sampler=sampler,
+#         ref_features=ref_features,
+#         batch_size=1,  # Single trajectory for testing
+#         feature_dim=feature_dim,
+#         num_inference_steps=20  # More steps for higher quality
+#     )
     
-    # Load trained policy
-    try:
-        agent.actor.unet.load_state_dict(torch.load("diffusion_ppo_policy.pth"))
-        print("Loaded trained policy successfully!")
-    except FileNotFoundError:
-        print("Warning: No trained policy found. Using pre-trained Stable Diffusion.")
+#     # Load trained policy
+#     try:
+#         agent.actor.unet.load_state_dict(torch.load("diffusion_ppo_policy.pth"))
+#         print("Loaded trained policy successfully!")
+#     except FileNotFoundError:
+#         print("Warning: No trained policy found. Using pre-trained Stable Diffusion.")
     
-    # Test prompts
-    test_prompts = [
-        "a photo of a mars crater",
-        "a large ancient mars crater with erosion",
-        "a small fresh mars crater with sharp edges",
-        "a deep mars crater with visible rock layers",
-        "a crater on mars with interesting geological features"
-    ]
+#     # Test prompts
+#     test_prompts = [
+#         "a photo of a mars crater",
+#         "a large ancient mars crater with erosion",
+#         "a small fresh mars crater with sharp edges",
+#         "a deep mars crater with visible rock layers",
+#         "a crater on mars with interesting geological features"
+#     ]
     
-    print(f"Generating {num_test_images} test images...")
-    test_rewards = []
+#     print(f"Generating {num_test_images} test images...")
+#     test_rewards = []
     
-    for i in range(num_test_images):
-        prompt = test_prompts[i % len(test_prompts)]
-        print(f"\nTest {i+1}: '{prompt}'")
+#     for i in range(num_test_images):
+#         prompt = test_prompts[i % len(test_prompts)]
+#         print(f"\nTest {i+1}: '{prompt}'")
         
-        # Generate image
-        trajectories, _, _, prompt_features = agent.generate_batch_for_prompt(prompt)
-        trajectory = trajectories[0]  # Use first trajectory
+#         # Generate image
+#         trajectories, _, _, prompt_features = agent.generate_batch_for_prompt(prompt)
+#         trajectory = trajectories[0]  # Use first trajectory
         
-        # Calculate diversity reward
-        reward = agent.reward_function.calculate_reward(trajectory)
-        test_rewards.append(reward)
+#         # Calculate diversity reward
+#         reward = agent.reward_function.calculate_reward(trajectory)
+#         test_rewards.append(reward)
         
-        print(f"  Diversity reward: {reward:.4f}")
+#         print(f"  Diversity reward: {reward:.4f}")
         
-        # Save test image
-        try:
+#         # Save test image
+#         try:
             
             
-            final_image = trajectory.final_image.squeeze(0).cpu()
-            final_image = torch.clamp(final_image, 0, 1)
+#             final_image = trajectory.final_image.squeeze(0).cpu()
+#             final_image = torch.clamp(final_image, 0, 1)
             
-            to_pil = transforms.ToPILImage()
-            pil_image = to_pil(final_image)
+#             to_pil = transforms.ToPILImage()
+#             pil_image = to_pil(final_image)
             
-            # Create test images directory
-            test_dir = os.path.join(current_path, "test_images")
-            os.makedirs(test_dir, exist_ok=True)
+#             # Create test images directory
+#             test_dir = os.path.join(current_path, "test_images")
+#             os.makedirs(test_dir, exist_ok=True)
             
-            image_path = os.path.join(test_dir, f"diffusion_ppo_test_{i+1}_{timestamp}.png")
-            pil_image.save(image_path)
-            print(f"  Test image saved: {image_path}")
+#             image_path = os.path.join(test_dir, f"diffusion_ppo_test_{i+1}_{timestamp}.png")
+#             pil_image.save(image_path)
+#             print(f"  Test image saved: {image_path}")
             
-        except Exception as e:
-            print(f"  Could not save image: {e}")
+#         except Exception as e:
+#             print(f"  Could not save image: {e}")
     
-    # Test summary
-    print(f"\n=== TEST RESULTS SUMMARY ===")
-    print(f"Average test diversity reward: {np.mean(test_rewards):.4f}")
-    print(f"Test reward std: {np.std(test_rewards):.4f}")
-    print(f"Best test reward: {max(test_rewards):.4f}")
-    print(f"Test images saved to: test_images/")
+#     # Test summary
+#     print(f"\n=== TEST RESULTS SUMMARY ===")
+#     print(f"Average test diversity reward: {np.mean(test_rewards):.4f}")
+#     print(f"Test reward std: {np.std(test_rewards):.4f}")
+#     print(f"Best test reward: {max(test_rewards):.4f}")
+#     print(f"Test images saved to: test_images/")
 
 if __name__ == "__main__":
     # Run training
