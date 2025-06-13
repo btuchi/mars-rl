@@ -37,9 +37,10 @@ class DiffusionSampler:
     Diffusion model sampler that records trajectories for RL training.
     """
     
-    def __init__(self, model_id: str = "CompVis/stable-diffusion-v1-4", device: str = "cuda"):
+    def __init__(self, model_id: str = "CompVis/stable-diffusion-v1-4", device: str = "cuda", use_fp16: bool = True):
 
         self.device = device
+        self.dtype = torch.float16 if use_fp16 else torch.float32
         
         # Add memory optimization
         torch.cuda.empty_cache()
@@ -47,14 +48,16 @@ class DiffusionSampler:
         # Load Stable Diffusion pipeline
         self.pipe = StableDiffusionPipeline.from_pretrained(
             model_id,
-            torch_dtype=torch.float32,           # Use float16 to save memory
+            torch_dtype=self.dtype,           # Use float16 to save memory
             safety_checker=None,
             requires_safety_checker=False,
             use_safetensors=True,
-            variant="fp16",
+            variant="fp16" if use_fp16 else None,
             low_cpu_mem_usage=False,              # This prevents meta device issues
             device_map=None                      # Disable automatic device mapping
         )
+
+        self.pipe.enable_xformers_memory_efficient_attention()
 
         # Move to device BEFORE enabling optimizations
         self.pipe = self.pipe.to(device)
@@ -106,6 +109,7 @@ class DiffusionSampler:
             text_embeddings = self.text_encoder(text_inputs.input_ids.to(self.device))[0]
         
         # Duplicate for batch
+        text_embeddings = text_embeddings.to(dtype=torch.float16)
         text_embeddings = text_embeddings.repeat(batch_size, 1, 1)
         
         return text_embeddings
@@ -146,7 +150,12 @@ class DiffusionSampler:
         latents_shape = (batch_size, self.unet.config.in_channels, height // 8, width // 8)
         
         # Sample initial noise
-        latents = torch.randn(latents_shape, generator=generator, device=self.device)
+        latents = torch.randn(
+            latents_shape, 
+            generator=generator, 
+            device=self.device,
+            dtype=self.dtype  # Use the sampler's dtype
+        )
         
         # Scale the initial noise by the standard deviation required by the scheduler
         latents = latents * self.scheduler.init_noise_sigma
@@ -183,6 +192,16 @@ class DiffusionSampler:
             # Calculate log probability of this action
             # This is a simplified version - in practice, we might want more sophisticated probability calculation
             log_prob = -0.5 * torch.sum(noise_pred_guided ** 2)  # Simplified Gaussian log-prob
+
+
+            with torch.no_grad():
+                # Assuming Gaussian noise distribution
+                noise_diff = noise_pred_guided - latents
+                log_prob = -0.5 * torch.sum(noise_diff ** 2) / (latents.numel())
+                log_prob = log_prob * 0.01  # Scale factor to prevent vanishing gradients
+
+            # Make sure to remove no_grad when storing for training
+            log_prob_with_grad = log_prob.detach().requires_grad_(True)
             
             # Denoise: Compute the previous noisy sample x_t -> x_{t-1}
             scheduler_output = self.scheduler.step(noise_pred_guided, t, latents, return_dict=True)
@@ -191,12 +210,22 @@ class DiffusionSampler:
             # Record this step in the trajectory
             step = TrajectoryStep(
                 timestep=t.item(),
-                state=latents.clone(),  # Current state x_t
-                action=prev_latents.clone(),  # Action taken (predicted x_{t-1})
-                condition=text_embeddings[1:2].clone(),  # Text condition (without uncond)
-                log_prob=log_prob.clone(),  # Log probability of this action
-                noise_pred=noise_pred_guided.clone()  # Raw noise prediction
+                state=latents.clone(),  
+                action=prev_latents.clone(),  
+                condition=text_embeddings[1:2].clone(),  
+                log_prob=log_prob_with_grad.clone(),  
+                noise_pred=noise_pred_guided.clone()  
             )
+
+            # step = TrajectoryStep(
+            #     timestep=t.item(),
+            #     state=latents.clone().to(torch.float16), # Current state x_t
+            #     action=prev_latents.clone().to(torch.float16), # Action taken (predicted x_{t-1})
+            #     condition=text_embeddings[1:2].clone().to(torch.float16), # Text condition (without uncond)
+            #     log_prob=log_prob.to(torch.float16), # Log probability of this action
+            #     noise_pred=noise_pred_guided.clone().to(torch.float16) # Raw noise prediction
+            # )
+
             trajectory_steps.append(step)
             
             # Update latents for next iteration

@@ -4,11 +4,14 @@
 #SBATCH -p GPU-shared                           
 #SBATCH -t 2:00:00                      
 #SBATCH --gres=gpu:h100-80:1            # Request 1 H100 (not 4!)
-#SBATCH --mem=22G                       # Add memory limit back
+#SBATCH --mem=128G                      
 #SBATCH -A eng240004p                    
 #SBATCH --mail-user=btuchi@g.hmc.edu     
 #SBATCH --mail-type=END,FAIL             
 #SBATCH --output=ppo_diffusion/outputs/diffusion_ppo_output_%j.txt
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export CUDA_VISIBLE_DEVICES=0
 
 export RL=/ocean/projects/eng240004p/btuchi/BRYCE/RL      # Set path to your RL project directory
 

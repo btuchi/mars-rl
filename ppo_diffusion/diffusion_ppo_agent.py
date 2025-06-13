@@ -54,7 +54,12 @@ class DiffusionPolicyNetwork(nn.Module):
 
         # Each step has its own log probability
         for step in trajectory.steps:
-            log_probs.append(step.log_prob)
+            # Ensure log_prob is a tensor with gradients
+            if isinstance(step.log_prob, torch.Tensor):
+                log_probs.append(step.log_prob)
+            else:
+                # Convert to tensor if needed
+                log_probs.append(torch.tensor(step.log_prob, requires_grad=True))
         
         # Total log probability = sum of all steps
         return torch.stack(log_probs).sum()
@@ -214,8 +219,8 @@ class DiffusionRewardFunction:
         if len(self.reward_history) > self.buffer_size:
             self.reward_history.pop(0)
         
-        if len(self.reward_history) < 2:
-            return reward
+        if len(self.reward_history) < 10:
+            return reward * 0.1
         
         mean_reward = np.mean(self.reward_history)
         std_reward = np.std(self.reward_history)
@@ -232,8 +237,8 @@ class DiffusionPPOAgent:
         
         # PPO hyperparameters (same as vanilla PPO)
         
-        self.LR_ACTOR = 1e-6       # Lower for diffusion models
-        self.LR_CRITIC = 5e-5     # Lower for diffusion models
+        self.LR_ACTOR = 3e-5       # Lower for diffusion models
+        self.LR_CRITIC = 1e-4     # Lower for diffusion models
         
         self.GAMMA = 1.0           # Usually 1.0 for diffusion (reward only at end)
         self.LAMBDA = 0.95         # Same GAE parameter
@@ -291,7 +296,7 @@ class DiffusionPPOAgent:
         # Clear immediately after getting features
         torch.cuda.empty_cache()
 
-        prompt_features_tensor = torch.FloatTensor(prompt_features).unsqueeze(0).to(device)
+        prompt_features_tensor = torch.from_numpy(prompt_features).to(device=device, dtype=self.dtype).unsqueeze(0)
         value = self.critic(prompt_features_tensor).detach().cpu().numpy()[0][0]
 
         # Clean up prompt tensor
@@ -401,10 +406,20 @@ class DiffusionPPOAgent:
         memo_returns = memo_advantages + memo_values
         
         # Convert to tensors
-        memo_features_tensor = torch.FloatTensor(memo_features).to(device)
-        memo_advantages_tensor = torch.tensor(memo_advantages, dtype=torch.float32).to(device)
-        memo_returns_tensor = torch.tensor(memo_returns, dtype=torch.float32).to(device)
-        # memo_old_log_probs_tensor = torch.tensor(memo_log_probs_array, dtype=torch.float32).to(device)
+        memo_features_tensor = torch.from_numpy(np.array(memo_features)).to(
+            device=self.device, 
+            dtype=self.dtype
+        )
+        memo_advantages_tensor = torch.tensor(
+            memo_advantages, 
+            dtype=self.dtype, 
+            device=self.device
+        )
+        memo_returns_tensor = torch.tensor(
+            memo_returns, 
+            dtype=self.dtype, 
+            device=self.device
+        )
         
         # Get old policy log probabilities (frozen)
         with torch.no_grad():

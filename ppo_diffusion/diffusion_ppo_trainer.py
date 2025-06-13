@@ -12,9 +12,10 @@ from PIL import Image
 import torchvision.transforms as transforms
 
 # Diffusion PPO Training Parameters (equivalent to vanilla PPO structure)
-NUM_EPISODE = 2              # Total number of "episodes" (trajectory generations)
-BATCH_SIZE = 1                 # Mini-batch size for PPO updates
-EPISODES_PER_UPDATE = 1        # Same as TRAJECTORY_LENGTH for diffusion
+NUM_EPISODE = 1000              # Total number of "episodes" (trajectory generations)
+BATCH_SIZE = 4                 # Mini-batch size for PPO updates
+EPISODES_PER_UPDATE = 4        # Same as TRAJECTORY_LENGTH for diffusion
+USE_FP16 = True                # define precision
 
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -61,7 +62,7 @@ def main():
     
     # Initialize diffusion sampler
     print("Initializing diffusion sampler...")
-    sampler = DiffusionSampler(device=device)
+    sampler = DiffusionSampler(device=device, use_fp16=USE_FP16)
     
     # Initialize PPO agent
     feature_dim = ref_features.shape[1] if len(ref_features.shape) > 1 else 512
@@ -70,8 +71,8 @@ def main():
         ref_features=ref_features,
         batch_size=BATCH_SIZE,
         feature_dim=feature_dim,
-        num_inference_steps=2,
-        images_per_prompt=1
+        num_inference_steps=20,
+        images_per_prompt=4
     )
     
     # Define crater prompts
