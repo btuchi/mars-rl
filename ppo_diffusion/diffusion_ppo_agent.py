@@ -238,7 +238,7 @@ class DiffusionPPOAgent:
         self.GAMMA = 1.0           # Usually 1.0 for diffusion (reward only at end)
         self.LAMBDA = 0.95         # Same GAE parameter
         
-        self.EPOCH = 2
+        self.EPOCH = 1
         self.EPSILON_CLIP = 0.1
 
         # Batch settings
@@ -430,7 +430,7 @@ class DiffusionPPOAgent:
                 print(f"  Regenerating {len(batch)} trajectories for gradient computation...")
                 for idx in batch:
                     prompt = memo_prompts[idx]  # Use the stored prompt
-                    
+
                     # Clear cache before each regeneration
                     torch.cuda.empty_cache()
                     

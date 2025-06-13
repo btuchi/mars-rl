@@ -38,7 +38,11 @@ class DiffusionSampler:
     """
     
     def __init__(self, model_id: str = "CompVis/stable-diffusion-v1-4", device: str = "cuda"):
+
         self.device = device
+
+        # Enable gradient checkpointing to save memory
+        self.unet.enable_gradient_checkpointing()
         
         # Add memory optimization
         torch.cuda.empty_cache()
