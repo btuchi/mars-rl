@@ -40,9 +40,6 @@ class DiffusionSampler:
     def __init__(self, model_id: str = "CompVis/stable-diffusion-v1-4", device: str = "cuda"):
 
         self.device = device
-
-        # Enable gradient checkpointing to save memory
-        self.unet.enable_gradient_checkpointing()
         
         # Add memory optimization
         torch.cuda.empty_cache()
@@ -75,6 +72,9 @@ class DiffusionSampler:
         self.vae = self.pipe.vae
         self.text_encoder = self.pipe.text_encoder
         self.tokenizer = self.pipe.tokenizer
+
+        # Enable gradient checkpointing to save memory
+        self.unet.enable_gradient_checkpointing()
         
         # Keep UNet in training mode but others in eval
         self.unet.train()
