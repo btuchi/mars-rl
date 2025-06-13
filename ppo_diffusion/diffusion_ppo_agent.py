@@ -245,8 +245,8 @@ class DiffusionPPOAgent:
         self.images_per_prompt = images_per_prompt
         
         # Initialize networks
-        self.actor = DiffusionPolicyNetwork(sampler, num_inference_steps).to(device)
-        self.old_actor = DiffusionPolicyNetwork(sampler, num_inference_steps).to(device)
+        self.actor = DiffusionPolicyNetwork(sampler, num_inference_steps)
+        self.old_actor = DiffusionPolicyNetwork(sampler, num_inference_steps)
         self.critic = DiffusionValueNetwork(feature_dim).to(device)
         
         # Optimizers (only optimize UNet, not the whole diffusion pipeline)
@@ -431,10 +431,17 @@ class DiffusionPPOAgent:
                 for idx in batch:
                     prompt = memo_prompts[idx]  # Use the stored prompt
                     
+                    # Clear cache before each regeneration
+                    torch.cuda.empty_cache()
+                    
                     # Generate new trajectory with current policy (gradients enabled)
                     trajectory = self.actor.forward(prompt)
                     current_log_prob = self.actor.calculate_log_prob(trajectory)
                     current_log_probs.append(current_log_prob)
+
+                    # Clear trajectory immediately after use
+                    del trajectory
+                    torch.cuda.empty_cache()
                 
                 current_log_probs_tensor = torch.stack(current_log_probs)
                 

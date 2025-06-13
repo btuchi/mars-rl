@@ -46,10 +46,17 @@ class DiffusionSampler:
         # Load Stable Diffusion pipeline
         self.pipe = StableDiffusionPipeline.from_pretrained(
             model_id,
-            torch_dtype=torch.float32,
+            torch_dtype=torch.float32,           # Use float16 to save memory
             safety_checker=None,
-            requires_safety_checker=False
-        ).to(device)
+            requires_safety_checker=False,
+            use_safetensors=True,
+            variant="fp16",
+            low_cpu_mem_usage=False,              # This prevents meta device issues
+            device_map=None                      # Disable automatic device mapping
+        )
+
+        # Move to device BEFORE enabling optimizations
+        self.pipe = self.pipe.to(device)
 
         # Enable memory efficient attention
         self.pipe.enable_attention_slicing("max")       # Maximum slicing
@@ -102,10 +109,10 @@ class DiffusionSampler:
     def sample_with_trajectory_recording(
         self,
         prompt: str,
-        num_inference_steps: int = 50,
-        guidance_scale: float = 7.5,
-        height: int = 512,
-        width: int = 512,
+        num_inference_steps: int = 2,
+        guidance_scale: float = 1.0,
+        height: int = 64,
+        width: int = 64,
         generator: Optional[torch.Generator] = None
     ) -> DiffusionTrajectory:
         """
