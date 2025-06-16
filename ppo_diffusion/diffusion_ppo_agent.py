@@ -237,7 +237,7 @@ class DiffusionPPOAgent:
                  feature_dim: int = 512, num_inference_steps: int = 20, images_per_prompt: int = 4):
         
         # Add dtype from sampler
-        self.dtype = sampler.dtype if hasattr(sampler, 'dtype') else torch.float32
+        self.dtype = torch.float32
         self.device = device
         
         # PPO hyperparameters (same as vanilla PPO)
@@ -257,10 +257,16 @@ class DiffusionPPOAgent:
         # Initialize networks
         self.actor = DiffusionPolicyNetwork(sampler, num_inference_steps)
         self.old_actor = DiffusionPolicyNetwork(sampler, num_inference_steps)
-        self.critic = DiffusionValueNetwork(feature_dim).to(device)
+        self.critic = DiffusionValueNetwork(feature_dim).to(device).to(self.dtype)
+
+        # Handle DataParallel case for optimizers
+        if hasattr(self.actor.unet, 'module'):
+            actor_params = self.actor.unet.module.parameters()
+        else:
+            actor_params = self.actor.unet.parameters()
         
         # Optimizers (only optimize UNet, not the whole diffusion pipeline)
-        self.actor_optimizer = optim.AdamW(self.actor.unet.parameters(), lr=self.LR_ACTOR, weight_decay=1e-4)
+        self.actor_optimizer = optim.AdamW(actor_params, lr=self.LR_ACTOR, weight_decay=1e-4)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.LR_CRITIC)
         
         # Components
@@ -395,9 +401,19 @@ class DiffusionPPOAgent:
             return
         
         print("Starting PPO update...")
+
+        # Copy current actor to old_actor (copy UNet weights) - Handle DataParallel
+        if hasattr(self.actor.unet, 'module') and hasattr(self.old_actor.unet, 'module'):
+            self.old_actor.unet.module.load_state_dict(self.actor.unet.module.state_dict())
+        elif hasattr(self.actor.unet, 'module'):
+            # Actor has DataParallel but old_actor doesn't - extract the module state
+            self.old_actor.unet.load_state_dict(self.actor.unet.module.state_dict())
+        else:
+            # Neither has DataParallel
+            self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
         
         # Copy current actor to old_actor (copy UNet weights)
-        self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
+        # self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
         
         # Get trajectory data
         memo_features, memo_prompts, memo_trajectories, memo_rewards, memo_values, memo_log_probs, batches = self.replay_buffer.sample()
@@ -436,7 +452,7 @@ class DiffusionPPOAgent:
             for trajectory in memo_trajectories:
                 old_log_prob = self.old_actor.calculate_log_prob(trajectory)
                 old_log_probs.append(old_log_prob.item())
-            old_log_probs = torch.tensor(old_log_probs, dtype=torch.float32).to(device)
+            old_log_probs = torch.tensor(old_log_probs, dtype=self.dtype).to(device)
         
         # Accumulate losses
         all_actor_losses = []
@@ -485,6 +501,10 @@ class DiffusionPPOAgent:
                 # Critic loss
                 batch_values = self.critic(memo_features_tensor[batch]).squeeze()
                 batch_returns = memo_returns_tensor[batch]
+
+                # Ensure both tensors have the same dtype
+                batch_values = batch_values.to(self.dtype)
+                batch_returns = batch_returns.to(self.dtype)
                 
                 critic_loss = nn.MSELoss()(batch_values, batch_returns)
                 
@@ -495,9 +515,15 @@ class DiffusionPPOAgent:
                 # Update actor (UNet)
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.actor.unet.parameters(), max_norm=0.5)
-                self.actor_optimizer.step()
+
+                # Handle gradient clipping for DataParallel
+                if hasattr(self.actor.unet, 'module'):
+                    torch.nn.utils.clip_grad_norm_(self.actor.unet.module.parameters(), max_norm=0.5)
+                else:
+                    torch.nn.utils.clip_grad_norm_(self.actor.unet.parameters(), max_norm=0.5)
                 
+                self.actor_optimizer.step()
+
                 # Update critic
                 self.critic_optimizer.zero_grad()
                 critic_loss.backward()
@@ -526,5 +552,12 @@ class DiffusionPPOAgent:
         models_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "models")
         os.makedirs(models_dir, exist_ok=True)
         policy_path = os.path.join(models_dir, "diffusion_ppo_policy.pth")
-        torch.save(self.actor.unet.state_dict(), policy_path)
+
+        # Handle DataParallel case for saving
+        if hasattr(self.actor.unet, 'module'):
+            state_dict = self.actor.unet.module.state_dict()
+        else:
+            state_dict = self.actor.unet.state_dict()
+
+        torch.save(state_dict, policy_path)
         print(f"Diffusion PPO policy saved to: {policy_path}")

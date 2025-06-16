@@ -15,7 +15,7 @@ import torchvision.transforms as transforms
 NUM_EPISODE = 1000              # Total number of "episodes" (trajectory generations)
 BATCH_SIZE = 4                 # Mini-batch size for PPO updates
 EPISODES_PER_UPDATE = 4        # Same as TRAJECTORY_LENGTH for diffusion
-USE_FP16 = True                # define precision
+USE_FP16 = False                # define precision
 
 # Device setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -62,7 +62,7 @@ def main():
     
     # Initialize diffusion sampler
     print("Initializing diffusion sampler...")
-    sampler = DiffusionSampler(device=device, use_fp16=USE_FP16)
+    sampler = DiffusionSampler(device=device)
     
     # Initialize PPO agent
     feature_dim = ref_features.shape[1] if len(ref_features.shape) > 1 else 512
