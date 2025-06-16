@@ -53,22 +53,29 @@ class DiffusionSampler:
             requires_safety_checker=False,
             use_safetensors=True,
             variant="fp16" if use_fp16 else None,
-            low_cpu_mem_usage=False,              # This prevents meta device issues
+            low_cpu_mem_usage=True,              # This prevents meta device issues
             device_map=None                      # Disable automatic device mapping
         )
 
         self.pipe.enable_xformers_memory_efficient_attention()
 
-        # Move to device BEFORE enabling optimizations
-        self.pipe = self.pipe.to(device)
-        self.pipe.unet = nn.DataParallel(self.pipe.unet)
-
         # Enable memory efficient attention
         self.pipe.enable_attention_slicing("max")       # Maximum slicing
-        self.pipe.enable_model_cpu_offload()           # CPU offload
         self.pipe.enable_vae_slicing()                 # VAE slicing
         self.pipe.enable_vae_tiling()                  # VAE tiling
-        self.pipe.enable_sequential_cpu_offload()     # Sequential offload (most aggressive)
+
+        self.pipe = self.pipe.to(device)
+
+        # Apply DataParallel for 2-GPU setup (do this AFTER device movement)
+        if torch.cuda.device_count() > 1:
+            print(f"Using DataParallel across {torch.cuda.device_count()} GPUs")
+            self.pipe.unet = nn.DataParallel(self.pipe.unet)
+            # Note: We skip CPU offload optimizations when using DataParallel
+            # as they conflict with multi-GPU setup
+        else:
+            # Single GPU - can use CPU offload
+            self.pipe.enable_model_cpu_offload()
+            self.pipe.enable_sequential_cpu_offload()
         
         # Extract components we need
         self.unet = self.pipe.unet
@@ -78,13 +85,20 @@ class DiffusionSampler:
         self.tokenizer = self.pipe.tokenizer
 
         # Enable gradient checkpointing to save memory
-        self.unet.enable_gradient_checkpointing()
+        if hasattr(self.unet, 'module'):
+            self.unet.module.enable_gradient_checkpointing()
+        else:
+            self.unet.enable_gradient_checkpointing()
         
         # Keep UNet in training mode but others in eval
         self.unet.train()
         self.vae.eval()
         self.text_encoder.eval()
-        
+
+        # Additional memory optimizations for 2-GPU setup
+        torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+        torch.backends.cuda.matmul.allow_tf32 = True  # Use TF32 for faster computation
+            
     def encode_prompt(self, prompt: str, batch_size: int = 1) -> torch.Tensor:
         """
         Encode text prompt into embeddings.
@@ -148,7 +162,8 @@ class DiffusionSampler:
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
         
         # Prepare latent space dimensions
-        latents_shape = (batch_size, self.unet.config.in_channels, height // 8, width // 8)
+        unet_config = self.unet.module.config if hasattr(self.unet, 'module') else self.unet.config
+        latents_shape = (batch_size, unet_config.in_channels, height // 8, width // 8)
         
         # Sample initial noise
         latents = torch.randn(
@@ -170,6 +185,11 @@ class DiffusionSampler:
         
         # Denoising loop with trajectory recording
         for i, t in enumerate(timesteps):
+
+            # Clear intermediate memory
+            if i > 0:  # Don't clear on first iteration
+                torch.cuda.empty_cache()
+            
             # Expand latents for classifier-free guidance
             latent_model_input = torch.cat([latents] * 2)
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
@@ -211,26 +231,21 @@ class DiffusionSampler:
             # Record this step in the trajectory
             step = TrajectoryStep(
                 timestep=t.item(),
-                state=latents.clone(),  
-                action=prev_latents.clone(),  
-                condition=text_embeddings[1:2].clone(),  
+                state=latents.clone().detach(),  
+                action=prev_latents.clone().detach(),  
+                condition=text_embeddings[1:2].clone().detach(),  
                 log_prob=log_prob_with_grad.clone(),  
-                noise_pred=noise_pred_guided.clone()  
+                noise_pred=noise_pred_guided.clone().detach()  
             )
-
-            # step = TrajectoryStep(
-            #     timestep=t.item(),
-            #     state=latents.clone().to(torch.float16), # Current state x_t
-            #     action=prev_latents.clone().to(torch.float16), # Action taken (predicted x_{t-1})
-            #     condition=text_embeddings[1:2].clone().to(torch.float16), # Text condition (without uncond)
-            #     log_prob=log_prob.to(torch.float16), # Log probability of this action
-            #     noise_pred=noise_pred_guided.clone().to(torch.float16) # Raw noise prediction
-            # )
 
             trajectory_steps.append(step)
             
             # Update latents for next iteration
             latents = prev_latents
+
+            # Clear intermediate variables to save memory
+            del noise_pred, noise_pred_uncond, noise_pred_text, noise_pred_guided
+            del latent_model_input, scheduler_output
         
         # Decode final latents to image
         with torch.no_grad():
@@ -241,9 +256,13 @@ class DiffusionSampler:
         # Create complete trajectory
         trajectory = DiffusionTrajectory(
             steps=trajectory_steps,
-            final_image=final_image,
-            condition=text_embeddings[1:2].clone()  # Store conditional embedding
+            final_image=final_image.detach(),
+            condition=text_embeddings[1:2].clone().detach()  # Store conditional embedding
         )
+
+        # Final memory cleanup
+        del text_embeddings, uncond_embeddings, latents
+        torch.cuda.empty_cache()
         
         return trajectory
     
