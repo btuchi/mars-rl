@@ -102,6 +102,7 @@ class DiffusionValueNetwork(nn.Module):
     
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """Estimate value from prompt features"""
+        features = features.to(dtype=torch.float32)
         x = self.relu(self.fc1(features))
         x = self.relu(self.fc2(x))
         value = self.fc3(x)
@@ -235,6 +236,10 @@ class DiffusionPPOAgent:
     def __init__(self, sampler: DiffusionSampler, ref_features: np.ndarray, batch_size: int, 
                  feature_dim: int = 512, num_inference_steps: int = 20, images_per_prompt: int = 4):
         
+        # Add dtype from sampler
+        self.dtype = sampler.dtype if hasattr(sampler, 'dtype') else torch.float32
+        self.device = device
+        
         # PPO hyperparameters (same as vanilla PPO)
         
         self.LR_ACTOR = 3e-5       # Lower for diffusion models
@@ -296,7 +301,11 @@ class DiffusionPPOAgent:
         # Clear immediately after getting features
         torch.cuda.empty_cache()
 
-        prompt_features_tensor = torch.from_numpy(prompt_features).to(device=device, dtype=self.dtype).unsqueeze(0)
+        prompt_features_tensor = torch.from_numpy(prompt_features).to(
+            device=device,
+            dtype=self.dtype
+        ).unsqueeze(0)
+
         value = self.critic(prompt_features_tensor).detach().cpu().numpy()[0][0]
 
         # Clean up prompt tensor

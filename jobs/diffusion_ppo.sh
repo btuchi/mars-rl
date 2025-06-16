@@ -3,7 +3,7 @@
 #SBATCH --job-name=diffusion_ppo_training
 #SBATCH -p GPU-shared                           
 #SBATCH -t 2:00:00                      
-#SBATCH --gres=gpu:h100-80:1            # Request 1 H100 (not 4!)
+#SBATCH --gres=gpu:h100-80:1         # Request 4 H100 GPUs
 #SBATCH --mem=128G                      
 #SBATCH -A eng240004p                    
 #SBATCH --mail-user=btuchi@g.hmc.edu     

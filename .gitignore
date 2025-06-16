@@ -55,5 +55,8 @@ samples/
 outputs/
 generated_craters/
 
+# === SSH Key ===
+*.pem
+
 # === Git Ignore This Gitignore ===
 .gitignore

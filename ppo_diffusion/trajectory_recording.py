@@ -37,7 +37,7 @@ class DiffusionSampler:
     Diffusion model sampler that records trajectories for RL training.
     """
     
-    def __init__(self, model_id: str = "CompVis/stable-diffusion-v1-4", device: str = "cuda", use_fp16: bool = True):
+    def __init__(self, model_id: str = "CompVis/stable-diffusion-v1-4", device: str = "cuda", use_fp16: bool = False):
 
         self.device = device
         self.dtype = torch.float16 if use_fp16 else torch.float32
@@ -61,6 +61,7 @@ class DiffusionSampler:
 
         # Move to device BEFORE enabling optimizations
         self.pipe = self.pipe.to(device)
+        self.pipe.unet = nn.DataParallel(self.pipe.unet)
 
         # Enable memory efficient attention
         self.pipe.enable_attention_slicing("max")       # Maximum slicing
