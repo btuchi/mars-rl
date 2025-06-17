@@ -12,7 +12,7 @@ from PIL import Image
 import torchvision.transforms as transforms
 
 # Diffusion PPO Training Parameters (equivalent to vanilla PPO structure)
-NUM_EPISODE = 1000              # Total number of "episodes" (trajectory generations)
+NUM_EPISODE = 500              # Total number of "episodes" (trajectory generations)
 BATCH_SIZE = 4                 # Mini-batch size for PPO updates
 EPISODES_PER_UPDATE = 4        # Same as TRAJECTORY_LENGTH for diffusion
 USE_FP16 = False                # define precision
@@ -39,6 +39,7 @@ def main():
     """main training loop"""
     
     print("=== DIFFUSION PPO TRAINING ===")
+    print(f"Using FP16: {USE_FP16}")  # Debug print
     
     # Load reference features
     try:
@@ -62,7 +63,8 @@ def main():
     
     # Initialize diffusion sampler
     print("Initializing diffusion sampler...")
-    sampler = DiffusionSampler(device=device)
+    sampler = DiffusionSampler(device=device, use_fp16=USE_FP16)
+    print(f"Sampler dtype: {sampler.dtype}")  # Debug print
     
     # Initialize PPO agent
     feature_dim = ref_features.shape[1] if len(ref_features.shape) > 1 else 512
@@ -72,7 +74,7 @@ def main():
         batch_size=BATCH_SIZE,
         feature_dim=feature_dim,
         num_inference_steps=20,
-        images_per_prompt=4
+        images_per_prompt=4,
     )
     
     # Define crater prompts

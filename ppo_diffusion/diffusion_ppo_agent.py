@@ -122,9 +122,10 @@ class DiffusionReplayMemory:
         self.rewards = []             # Diversity rewards
         self.values = []              # Value predictions
         self.log_probs = []          # Log probabilities of trajectories
+        self.log_prob_tensors = []  # Store actual tensors with gradients
         self.BATCH_SIZE = batch_size
     
-    def add_memo(self, prompt_features, prompt, trajectory, reward, value, log_prob):
+    def add_memo(self, prompt_features, prompt, trajectory, reward, value, log_prob, log_prob_tensor):
         """Add a trajectory experience (equivalent to add_memo in vanilla PPO)"""
         self.prompt_features.append(prompt_features)
         self.trajectories.append(trajectory)
@@ -132,6 +133,7 @@ class DiffusionReplayMemory:
         self.rewards.append(reward)
         self.values.append(value)
         self.log_probs.append(log_prob)
+        self.log_prob_tensors.append(log_prob_tensor)
     
     def sample(self):
         """
@@ -152,6 +154,7 @@ class DiffusionReplayMemory:
                 np.array(self.rewards),            # rewards
                 np.array(self.values),             # values
                 np.array(self.log_probs),          # for next_state equivalent
+                self.log_prob_tensors,
                 batches)
     
     def clear_memo(self):
@@ -162,6 +165,7 @@ class DiffusionReplayMemory:
         self.rewards = []
         self.values = []
         self.log_probs = []
+        self.log_prob_tensors = []
 
 class DiffusionRewardFunction:
     """
@@ -234,11 +238,13 @@ class DiffusionPPOAgent:
     - Adapted for diffusion trajectory generation
     """
     def __init__(self, sampler: DiffusionSampler, ref_features: np.ndarray, batch_size: int, 
-                 feature_dim: int = 512, num_inference_steps: int = 20, images_per_prompt: int = 4):
+                 feature_dim: int = 512, num_inference_steps: int = 20, images_per_prompt: int = 4, use_fp16: bool = False):
         
         # Add dtype from sampler
-        self.dtype = torch.float32
+        self.dtype = sampler.dtype if hasattr(sampler, 'dtype') else torch.float32
         self.device = device
+
+        print(f"PPO Agent using dtype: {self.dtype}")  # Debug print
         
         # PPO hyperparameters (same as vanilla PPO)
         
@@ -321,6 +327,7 @@ class DiffusionPPOAgent:
         # Generate batch of trajectories
         trajectories = []
         log_probs = []
+        log_prob_tensors = []
         
         print(f"Generating {self.images_per_prompt} images for prompt: '{prompt}'")
         for i in range(self.images_per_prompt):
@@ -329,9 +336,11 @@ class DiffusionPPOAgent:
             torch.cuda.empty_cache()
             gc.collect()
 
-            trajectory, log_prob = self.actor.select_trajectory(prompt)
+            trajectory, log_prob_tensor = self.actor.select_trajectory(prompt)
             trajectories.append(trajectory)
-            log_probs.append(log_prob.item() if torch.is_tensor(log_prob) else log_prob)
+
+            log_probs.append(log_prob_tensor.item())
+            log_prob_tensors.append(log_prob_tensor)  # Keep tensor with gradients!
 
             print(f"  Image {i+1}/{self.images_per_prompt} generated")
 
@@ -355,15 +364,16 @@ class DiffusionPPOAgent:
         print(f"  Individual rewards: {individual_rewards}")
         print(f"  Average reward: {avg_reward:.4f}")
         
-        # Store each trajectory with its individual reward - UPDATED to include prompt
-        for i, (trajectory, log_prob, reward) in enumerate(zip(trajectories, log_probs, individual_rewards)):
+        # Store each trajectory with its individual reward
+        for i, (trajectory, log_prob, log_prob_tensor, reward) in enumerate(zip(trajectories, log_probs, log_prob_tensors, individual_rewards)):
             self.replay_buffer.add_memo(
                 prompt_features,    # features
                 prompt,            # store the actual prompt
                 trajectory,        # trajectory
                 reward,           # reward
                 value,            # value
-                log_prob          # log_prob
+                log_prob,          # log_prob
+                log_prob_tensor
             )
     
         
@@ -416,7 +426,7 @@ class DiffusionPPOAgent:
         # self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
         
         # Get trajectory data
-        memo_features, memo_prompts, memo_trajectories, memo_rewards, memo_values, memo_log_probs, batches = self.replay_buffer.sample()
+        memo_features, memo_prompts, memo_trajectories, memo_rewards, memo_values, memo_log_probs, memo_log_prob_tensors, batches = self.replay_buffer.sample()
         
         # Convert log_probs to numpy array
         memo_log_probs_array = np.array([lp.item() if torch.is_tensor(lp) else lp for lp in memo_log_probs])
@@ -467,23 +477,16 @@ class DiffusionPPOAgent:
                 # Current policy log probabilities
                 current_log_probs = []
 
-                print(f"  Regenerating {len(batch)} trajectories for gradient computation...")
+                # NO REGENERATION! Use stored tensors with gradients
+                print(f"  Using stored gradients for {len(batch)} trajectories...")
+                
+                # Get current log probs from stored tensors (they still have gradients!)
+                current_log_probs = []
                 for idx in batch:
-                    prompt = memo_prompts[idx]  # Use the stored prompt
-
-                    # Clear cache before each regeneration
-                    torch.cuda.empty_cache()
-                    
-                    # Generate new trajectory with current policy (gradients enabled)
-                    trajectory = self.actor.forward(prompt)
-                    current_log_prob = self.actor.calculate_log_prob(trajectory)
-                    current_log_probs.append(current_log_prob)
-
-                    # Clear trajectory immediately after use
-                    del trajectory
-                    torch.cuda.empty_cache()
+                    current_log_probs.append(memo_log_prob_tensors[idx])
                 
                 current_log_probs_tensor = torch.stack(current_log_probs)
+                current_log_probs_tensor = current_log_probs_tensor.to(self.dtype)
                 
                 # Calculate ratio
                 ratio = torch.exp(current_log_probs_tensor - old_log_probs[batch])

@@ -57,14 +57,18 @@ class DiffusionSampler:
             device_map=None                      # Disable automatic device mapping
         )
 
-        self.pipe.enable_xformers_memory_efficient_attention()
-
         # Enable memory efficient attention
+        self.pipe.enable_xformers_memory_efficient_attention()
         self.pipe.enable_attention_slicing("max")       # Maximum slicing
         self.pipe.enable_vae_slicing()                 # VAE slicing
         self.pipe.enable_vae_tiling()                  # VAE tiling
 
         self.pipe = self.pipe.to(device)
+
+        if not use_fp16:  # Only convert to float32 if not using fp16
+            self.pipe.unet.to(torch.float32)
+            self.pipe.vae.to(torch.float32)
+            self.pipe.text_encoder.to(torch.float32)
 
         # Apply DataParallel for 2-GPU setup (do this AFTER device movement)
         if torch.cuda.device_count() > 1:
@@ -124,7 +128,7 @@ class DiffusionSampler:
             text_embeddings = self.text_encoder(text_inputs.input_ids.to(self.device))[0]
         
         # Duplicate for batch
-        text_embeddings = text_embeddings.to(dtype=torch.float16)
+        text_embeddings = text_embeddings.to(dtype=self.dtype)
         text_embeddings = text_embeddings.repeat(batch_size, 1, 1)
         
         return text_embeddings
