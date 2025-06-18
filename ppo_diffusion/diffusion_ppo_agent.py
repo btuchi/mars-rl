@@ -4,6 +4,8 @@ import torch.optim as optim
 import numpy as np
 import clip
 import os.path
+import torchvision.transforms as transforms
+from PIL import Image
 from typing import List, Optional, Tuple
 from trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
 from diversity_reward import calculate_individual_diversity_rewards
@@ -238,7 +240,9 @@ class DiffusionPPOAgent:
     - Adapted for diffusion trajectory generation
     """
     def __init__(self, sampler: DiffusionSampler, ref_features: np.ndarray, batch_size: int, 
-                 feature_dim: int = 512, num_inference_steps: int = 20, images_per_prompt: int = 4, use_fp16: bool = False):
+                 feature_dim: int = 512, num_inference_steps: int = 20,
+                 images_per_prompt: int = 4, use_fp16: bool = False,
+                 save_samples: bool = True, training_start: str = None):
         
         # Add dtype from sampler
         self.dtype = sampler.dtype if hasattr(sampler, 'dtype') else torch.float32
@@ -249,7 +253,7 @@ class DiffusionPPOAgent:
         # PPO hyperparameters (same as vanilla PPO)
         
         self.LR_ACTOR = 3e-5       # Lower for diffusion models
-        self.LR_CRITIC = 1e-4     # Lower for diffusion models
+        self.LR_CRITIC = 3e-4     # Lower for diffusion models
         
         self.GAMMA = 1.0           # Usually 1.0 for diffusion (reward only at end)
         self.LAMBDA = 0.95         # Same GAE parameter
@@ -282,7 +286,97 @@ class DiffusionPPOAgent:
         # For text embeddings (simple approach - could be improved)
         self.clip_model, _ = clip.load("ViT-B/32", device=device)
         self.clip_model.eval()
+
+        # image saving parameters
+        self.save_size = (64, 64)               # Fixed 64x64 size
+        self.save_quality = 85                  # Good quality JPEG
+
+        # sample saving setup
+        self.save_samples = save_samples
+        if self.save_samples:
+            self.setup_sample_saving()
+        
+        self.training_start = training_start
     
+    def setup_sample_saving(self):
+        """Set up directories and tracking for sample image saving"""
+        # ppo_diffusion/
+        current_path = os.path.abspath(__file__)
+
+        self.samples_dir = os.path.join(current_path, f"images/while_training/{self.training_timestamp}")
+        os.makedirs(self.samples_dir, exist_ok=True)
+        
+        # Also create a metadata file
+        self.create_training_metadata()
+        
+        print(f"📁 Sample images will be saved to: {self.samples_dir}")
+        print(f"🕐 Training timestamp: {self.training_timestamp}")
+
+    def create_training_metadata(self):
+        """Create a metadata file with training information"""
+        metadata_path = self.samples_dir / "training_info.txt"
+        
+        with open(metadata_path, 'w') as f:
+            f.write(f"Training Session: {self.training_timestamp}\n")
+            f.write(f"Started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Images per prompt: {self.images_per_prompt}\n")
+            f.write(f"Device: {self.device}\n")
+            f.write(f"Dtype: {self.dtype}\n")
+            f.write("="*50 + "\n")
+            f.write("Episode Log:\n")
+        
+        print(f"📝 Created training metadata: {metadata_path}")
+    
+    def log_episode_info(self, episode: int, prompt: str, avg_reward: float, individual_rewards: list):
+        """Log episode information to metadata file"""
+        metadata_path = self.samples_dir / "training_info.txt"
+        
+        try:
+            with open(metadata_path, 'a') as f:
+                f.write(f"Ep {episode:04d}: '{prompt}' | Avg: {avg_reward:.4f} | Rewards: {individual_rewards}\n")
+        except Exception as e:
+            print(f"⚠️ Could not log episode info: {e}")
+
+    def save_trajectory_image(self, trajectory, prompt: str, episode: int, image_idx: int, reward: float = None):
+        """Save a single trajectory image with metadata"""
+        try:
+            # Convert trajectory to PIL image
+            final_image = trajectory.final_image.squeeze(0).cpu()
+            final_image = torch.clamp(final_image, 0, 1)
+            
+            to_pil = transforms.ToPILImage()
+            pil_image = to_pil(final_image)
+
+            # Resize to exactly 64x64
+            resized_image = pil_image.resize(
+                self.save_size,  # (64, 64)
+                Image.Resampling.LANCZOS  # High-quality resampling
+            )
+            
+            # Create descriptive filename
+            safe_prompt = "".join(c for c in prompt if c.isalnum() or c in (' ', '-', '_')).strip()
+            safe_prompt = safe_prompt[:30]  # Limit length
+            
+            reward_str = f"_r{reward:.3f}" if reward is not None else ""
+            filename = f"ep{episode:04d}_img{image_idx}_{safe_prompt}{reward_str}.png"
+            
+            save_path = self.samples_dir / filename
+
+            # Save as JPEG with fixed quality
+            resized_image.save(
+                save_path, 
+                format='JPEG',
+                quality=self.save_quality,
+                optimize=True
+            )
+            
+            print(f"  💾 Saved sample: {filename}")
+            return str(save_path)
+            
+        except Exception as e:
+            print(f"  ⚠️ Could not save sample image: {e}")
+            return None
+        
     # TODO: Play with feature sizes
     def get_prompt_features(self, prompt: str) -> np.ndarray:
         """Convert prompt to features (equivalent to state representation)"""
@@ -292,7 +386,7 @@ class DiffusionPPOAgent:
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         return text_features.cpu().numpy().flatten()
     
-    def generate_batch_for_prompt(self, prompt: str) -> Tuple[List[DiffusionTrajectory], np.ndarray, float, np.ndarray]:
+    def generate_batch_for_prompt(self, prompt: str, episode: int = None, save_samples: bool = None) -> Tuple[List[DiffusionTrajectory], np.ndarray, float, np.ndarray]:
         """
         Generate a batch of images for a single prompt and calculate individual rewards
         
@@ -306,6 +400,13 @@ class DiffusionPPOAgent:
         torch.cuda.empty_cache()
         import gc
         gc.collect()
+
+        # Determine if we should save samples this episode
+        should_save = False
+        if save_samples is not None:
+            should_save = save_samples
+        elif self.save_samples and episode is not None:
+            should_save = (episode % 5 == 0)  # Save every 2 episodes
 
         # Get prompt features and value (same for all images from this prompt)
         prompt_features = self.get_prompt_features(prompt)
@@ -344,6 +445,21 @@ class DiffusionPPOAgent:
 
             print(f"  Image {i+1}/{self.images_per_prompt} generated")
 
+            # Save sample image if needed (before cleaning up trajectory)
+            if should_save and i == 0:  # Save first image of batch
+                # Calculate individual reward for this image first
+                try:
+                    features = extract_features_from_trajectory(trajectory, None)
+                    features = features.reshape(1, -1)
+                    individual_reward = calculate_individual_diversity_rewards(
+                        features, self.ref_features, gamma=None
+                    )[0]
+                    individual_reward = self.reward_function.normalize_reward(individual_reward)
+                except:
+                    individual_reward = None
+                
+                self.save_trajectory_image(trajectory, prompt, episode, i+1, individual_reward)
+
             # Clean up trajectory steps to save memory (but keep the trajectory object)
             if hasattr(trajectory, 'steps'):
                 for step in trajectory.steps:
@@ -363,6 +479,10 @@ class DiffusionPPOAgent:
         
         print(f"  Individual rewards: {individual_rewards}")
         print(f"  Average reward: {avg_reward:.4f}")
+
+        # Log episode information
+        if episode is not None:
+            self.log_episode_info(episode, prompt, avg_reward, individual_rewards.tolist())
         
         # Store each trajectory with its individual reward
         for i, (trajectory, log_prob, log_prob_tensor, reward) in enumerate(zip(trajectories, log_probs, log_prob_tensors, individual_rewards)):
@@ -554,7 +674,7 @@ class DiffusionPPOAgent:
         """Save the trained policy (UNet weights)"""
         models_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "models")
         os.makedirs(models_dir, exist_ok=True)
-        policy_path = os.path.join(models_dir, "diffusion_ppo_policy.pth")
+        policy_path = os.path.join(models_dir, f"diffusion_ppo_policy_{self.training_start}.pth")
 
         # Handle DataParallel case for saving
         if hasattr(self.actor.unet, 'module'):
