@@ -1,0 +1,21 @@
+Test Session for Training: 20250616234704
+Test Started: 2025-06-18 19:00:34
+Device: cuda
+FP16: False
+==================================================
+Test Results:
+'a grayscale aerial view of a mars crater' | Trained: 3.0981
+'a grayscale aerial view of a large impact crater on mars surface' | Trained: 5.0509
+'a grayscale aerial view of a round crater with raised rim on red planet surface' | Trained: 1.0307
+'a grayscale aerial view of mars crater with shadows' | Trained: 6.9645
+'a grayscale aerial view of a crater on mars with rocky terrain' | Trained: 4.9221
+'a grayscale aerial view of a mars crater' | Trained: 4.4348
+'a grayscale aerial view of a large impact crater on mars surface' | Trained: 5.7262
+'a grayscale aerial view of a round crater with raised rim on red planet surface' | Trained: 5.6940
+'a grayscale aerial view of mars crater with shadows' | Trained: 3.7209
+'a grayscale aerial view of a crater on mars with rocky terrain' | Trained: 5.9390
+==================================================
+COMPARISON SUMMARY:
+Trained Avg: 4.2133 ± 2.0073
+Baseline Avg: 5.1030 ± 0.8710
+Improvement: -0.8897

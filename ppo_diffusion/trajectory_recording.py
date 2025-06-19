@@ -136,10 +136,10 @@ class DiffusionSampler:
     def sample_with_trajectory_recording(
         self,
         prompt: str,
-        num_inference_steps: int = 2,
-        guidance_scale: float = 1.0,
-        height: int = 64,
-        width: int = 64,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 8.0,
+        height: int = 512,
+        width: int = 512,
         generator: Optional[torch.Generator] = None
     ) -> DiffusionTrajectory:
         """

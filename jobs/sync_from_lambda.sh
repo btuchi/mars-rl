@@ -36,7 +36,7 @@ echo ""
 SYNC_SUCCESS=0
 
 # Run rsync
-echo "📦 Syncing outputs/, models/, plots/ from Lambda..."
+echo "📦 Syncing outputs/, models/, plots/, images/ from Lambda..."
 rsync -avzhP --update \
     -e "ssh -i $PEM_KEY" \
     --include="outputs/" \
@@ -45,6 +45,8 @@ rsync -avzhP --update \
     --include="models/**" \
     --include="plots/" \
     --include="plots/**" \
+    --include="images/" \
+    --include="images/**" \
     --exclude="*" \
     "${LAMBDA_USER}@${LAMBDA_HOST}:${REMOTE_DIR}" "${LOCAL_DIR}/"
 

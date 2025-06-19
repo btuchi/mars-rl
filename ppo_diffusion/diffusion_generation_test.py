@@ -1,6 +1,4 @@
 """
-diffusion_generation_test.py
-
 Test script to generate images using the trained Diffusion PPO model.
 Compares trained model vs original pretrained model and evaluates diversity rewards.
 """
@@ -28,7 +26,7 @@ class DiffusionModelTester:
         self.use_fp16 = use_fp16
         self.training_timestamp = training_timestamp
         
-        # Convert to Path object immediately
+        # ppo_diffusion/
         self.current_dir = Path(os.path.abspath(__file__)).parent
         
         # Use proper path construction
@@ -38,10 +36,10 @@ class DiffusionModelTester:
         
         # Create ALL directories
         self.test_dir.mkdir(parents=True, exist_ok=True)
-        self.baseline_dir.mkdir(parents=True, exist_ok=True)  # This was missing!
+        self.baseline_dir.mkdir(parents=True, exist_ok=True)
         self.comparison_dir.mkdir(parents=True, exist_ok=True)
         
-        # Rest of init...
+        # Rest of init
         self.ref_features = self.load_reference_features()
         print(f"📁 Test images: {self.test_dir}")
         print(f"📁 Baseline images: {self.baseline_dir}")
@@ -109,9 +107,10 @@ class DiffusionModelTester:
             feature_dim=feature_dim,
             num_inference_steps=20,
             images_per_prompt=1,
-            save_samples=False
+            save_samples=False,
+            training_start=self.training_timestamp
         )
-        
+
         print("✅ Baseline model loaded!")
         return baseline_agent
     
@@ -145,7 +144,8 @@ class DiffusionModelTester:
             feature_dim=feature_dim,
             num_inference_steps=20,
             images_per_prompt=1,
-            save_samples=False  # Don't save during testing
+            save_samples=False,
+            training_start=self.training_timestamp
         )
 
         if hasattr(agent.actor.unet, 'module'):
@@ -241,14 +241,29 @@ class DiffusionModelTester:
         """Compare trained vs baseline models on the same prompts"""
         print("\n🔬 === MODEL COMPARISON ===")
         
-        # Load both models
+        # Load trained model, generate results
         trained_agent = self.load_trained_model()
-        baseline_agent = self.load_baseline_model()
-        
-        # Generate with both models
         trained_results = self.generate_test_batch(trained_agent, prompts, "trained")
-        baseline_results = self.generate_test_batch(baseline_agent, prompts, "baseline")
+
+        print("🧹 Cleaning up trained model memory...")
+        del trained_agent  # Delete the agent
+        torch.cuda.empty_cache()  # Clear CUDA cache
+        import gc
+        gc.collect()  # Python garbage collection
+
+        # Small delay to ensure cleanup
+        time.sleep(2)
         
+         # Load baseline model, generate results
+        baseline_agent = self.load_baseline_model()
+        baseline_results = self.generate_test_batch(baseline_agent, prompts, "baseline")
+
+        # Clean up baseline model too
+        print("🧹 Cleaning up baseline model memory...")
+        del baseline_agent
+        torch.cuda.empty_cache()
+        gc.collect()
+                
         # Create comparison visualizations
         self.create_comparison_plots(trained_results, baseline_results)
         
@@ -286,7 +301,6 @@ class DiffusionModelTester:
     def create_comparison_plots(self, trained_results: list, baseline_results: list):
         """Create side-by-side comparison plots"""
         
-        
         n_images = len(trained_results)
         fig, axes = plt.subplots(2, n_images, figsize=(4*n_images, 8))
         
@@ -315,6 +329,17 @@ class DiffusionModelTester:
         plt.show()
         
         print(f"💾 Comparison plot saved: {comparison_path}")
+    
+    def load_test_prompts(self, category: str):
+        # Load prompts from prompts folder
+        test_prompts_file = os.path.join(self.current_dir, "prompts", "test", category)
+        
+        # Read prompts from file
+        test_prompts = []
+
+        with open(test_prompts_file, 'r') as f:
+            test_prompts = [line.strip() for line in f if line.strip()]
+        print(f"Loaded {len(test_prompts)} training prompts from {test_prompts_file}")
 
 
 def get_latest_timestamp():
@@ -359,6 +384,10 @@ def get_latest_timestamp():
         print(f"🕐 Found latest timestamp: {latest_timestamp}")
         return latest_timestamp
 
+    
+
+
+
 def main():
     """Test a trained model"""
 
@@ -370,15 +399,10 @@ def main():
 
     tester = DiffusionModelTester(device="cuda", use_fp16=False, training_timestamp=timestamp)
     
-    # Test prompts
-    test_prompts = [
-        "a photo of a mars crater",
-        "a detailed mars crater with shadows and rocks",
-        "a large ancient mars crater with erosion patterns",
-        "a small fresh mars crater with sharp edges",
-        "a deep mars crater with visible geological layers"
-    ]
+    category = "crater"
     
+    # Test prompts
+    test_prompts = tester.load_test_prompts(category)    
     print("🔧 Choose testing mode:")
     print("1. Test trained model only")
     print("2. Compare trained vs baseline models")
