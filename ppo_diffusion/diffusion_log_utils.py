@@ -18,6 +18,9 @@ BEST_REWARD_LOG = []
 EPISODE_LOG = []
 TRAINING_METADATA = {}
 
+# Training category
+CATEGORY = "crater"
+
 class TrainingLogger:
     """Robust CSV logger that saves periodically and on interruption"""
 
@@ -114,107 +117,106 @@ class TrainingLogger:
             self.save_episode_log()
             self.last_save_episode = episode
         
-        def log_update(self, update_num: int, actor_loss: float, critic_loss: float, 
-                   avg_advantage: float, episode: int):
-            """Log PPO update data"""
-            loss_entry = {
-                'update': update_num,
-                'episode': episode,
-                'actor_loss': actor_loss,
-                'critic_loss': critic_loss,
-                'avg_advantage': avg_advantage,
-                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
-            }
-            
-            self.loss_data.append(loss_entry)
-            
-            # Update metadata
-            self.metadata['total_updates'] = update_num
-            
-            # Save loss log (smaller, save more frequently)
-            self.save_loss_log()
+    def log_update(self, update_num: int, actor_loss: float, critic_loss: float, episode: int):
+        """Log PPO update data"""
+        loss_entry = {
+            'update': update_num,
+            'episode': episode,
+            'actor_loss': actor_loss,
+            'critic_loss': critic_loss,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
         
-        def save_episode_log(self):
-            """Save episode data to CSV"""
-            try:
-                if self.episode_data:
-                    df = pd.DataFrame(self.episode_data)
-                    df.to_csv(self.episode_csv, index=False)
-                    print(f"💾 Episode log saved: {len(self.episode_data)} episodes")
-            except Exception as e:
-                print(f"⚠️ Error saving episode log: {e}")
+        self.loss_data.append(loss_entry)
         
-        def save_loss_log(self):
-            """Save loss data to CSV"""
-            try:
-                if self.loss_data:
-                    df = pd.DataFrame(self.loss_data)
-                    df.to_csv(self.loss_csv, index=False)
-            except Exception as e:
-                print(f"⚠️ Error saving loss log: {e}")
+        # Update metadata
+        self.metadata['total_updates'] = update_num
+        
+        # Save loss log (smaller, save more frequently)
+        self.save_loss_log()
+        
+    def save_episode_log(self):
+        """Save episode data to CSV"""
+        try:
+            if self.episode_data:
+                df = pd.DataFrame(self.episode_data)
+                df.to_csv(self.episode_csv, index=False)
+                print(f"💾 Episode log saved: {len(self.episode_data)} episodes")
+        except Exception as e:
+            print(f"⚠️ Error saving episode log: {e}")
+        
+    def save_loss_log(self):
+        """Save loss data to CSV"""
+        try:
+            if self.loss_data:
+                df = pd.DataFrame(self.loss_data)
+                df.to_csv(self.loss_csv, index=False)
+        except Exception as e:
+            print(f"⚠️ Error saving loss log: {e}")
 
-        def save_metadata(self):
-            """Save training metadata"""
-            try:
-                # Calculate final average reward
-                if self.episode_data:
-                    recent_rewards = [ep['avg_reward'] for ep in self.episode_data[-20:]]
-                    self.metadata['final_avg_reward'] = sum(recent_rewards) / len(recent_rewards)
-                
-                df = pd.DataFrame([self.metadata])
-                df.to_csv(self.metadata_csv, index=False)
-            except Exception as e:
-                print(f"⚠️ Error saving metadata: {e}")
+    def save_metadata(self):
+        """Save training metadata"""
+        try:
+            # Calculate final average reward
+            if self.episode_data:
+                recent_rewards = [ep['avg_reward'] for ep in self.episode_data[-20:]]
+                self.metadata['final_avg_reward'] = sum(recent_rewards) / len(recent_rewards)
+            
+            df = pd.DataFrame([self.metadata])
+            df.to_csv(self.metadata_csv, index=False)
+        except Exception as e:
+            print(f"⚠️ Error saving metadata: {e}")
         
-        def save_all_logs(self, final: bool = False):
-            """Save all logs at once"""
-            if final:
-                self.metadata['end_time'] = time.strftime('%Y-%m-%d %H:%M:%S')
-                self.metadata['completed'] = True
-            
-            self.save_episode_log()
-            self.save_loss_log()
-            self.save_metadata()
-            
-            if final:
-                print(f"📊 Final logs saved to: {self.logs_dir}")
-                self.create_summary_report()
+    def save_all_logs(self, final: bool = False):
+        """Save all logs at once"""
+        if final:
+            self.metadata['end_time'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            self.metadata['completed'] = True
+        
+        self.save_episode_log()
+        self.save_loss_log()
+        self.save_metadata()
+        
+        if final:
+            print(f"📊 Final logs saved to: {self.logs_dir}")
+            self.create_summary_report()
         
 
-        def create_summary_report(self):
-            """Create a human-readable summary report"""
-            try:
-                summary_path = self.logs_dir / "training_summary.txt"
-                
-                with open(summary_path, 'w') as f:
-                    f.write(f"=== DIFFUSION PPO TRAINING SUMMARY ===\n")
-                    f.write(f"Category: {self.metadata['category']}\n")
-                    f.write(f"Timestamp: {self.metadata['training_timestamp']}\n")
-                    f.write(f"Started: {self.metadata['start_time']}\n")
-                    f.write(f"Ended: {self.metadata['end_time']}\n")
-                    f.write(f"Completed: {self.metadata['completed']}\n")
-                    if self.metadata['interruption_reason']:
-                        f.write(f"Interruption: {self.metadata['interruption_reason']}\n")
-                    f.write(f"Total Episodes: {self.metadata['total_episodes']}\n")
-                    f.write(f"Total Updates: {self.metadata['total_updates']}\n")
-                    f.write(f"Best Reward: {self.metadata['best_reward']:.4f}\n")
-                    f.write(f"Final Avg Reward: {self.metadata['final_avg_reward']:.4f}\n")
-                    f.write("="*50 + "\n")
-                    
-                    # Episode statistics
-                    if self.episode_data:
-                        rewards = [ep['avg_reward'] for ep in self.episode_data]
-                        f.write(f"Reward Statistics:\n")
-                        f.write(f"  Mean: {sum(rewards)/len(rewards):.4f}\n")
-                        f.write(f"  Min: {min(rewards):.4f}\n")
-                        f.write(f"  Max: {max(rewards):.4f}\n")
-                        f.write(f"  Std: {pd.Series(rewards).std():.4f}\n")
-                
-                print(f"📋 Summary report created: {summary_path}")
-                
-            except Exception as e:
-                print(f"⚠️ Error creating summary report: {e}")
+    def create_summary_report(self):
+        """Create a human-readable summary report"""
+        try:
+            summary_path = self.logs_dir / "training_summary.txt"
             
+            with open(summary_path, 'w') as f:
+                f.write(f"=== DIFFUSION PPO TRAINING SUMMARY ===\n")
+                f.write(f"Category: {self.metadata['category']}\n")
+                f.write(f"Timestamp: {self.metadata['training_timestamp']}\n")
+                f.write(f"Started: {self.metadata['start_time']}\n")
+                f.write(f"Ended: {self.metadata['end_time']}\n")
+                f.write(f"Completed: {self.metadata['completed']}\n")
+                if self.metadata['interruption_reason']:
+                    f.write(f"Interruption: {self.metadata['interruption_reason']}\n")
+                f.write(f"Total Episodes: {self.metadata['total_episodes']}\n")
+                f.write(f"Total Updates: {self.metadata['total_updates']}\n")
+                f.write(f"Best Reward: {self.metadata['best_reward']:.4f}\n")
+                f.write(f"Final Avg Reward: {self.metadata['final_avg_reward']:.4f}\n")
+                f.write("="*50 + "\n")
+                
+                # Episode statistics
+                if self.episode_data:
+                    rewards = [ep['avg_reward'] for ep in self.episode_data]
+                    f.write(f"Reward Statistics:\n")
+                    f.write(f"  Mean: {sum(rewards)/len(rewards):.4f}\n")
+                    f.write(f"  Min: {min(rewards):.4f}\n")
+                    f.write(f"  Max: {max(rewards):.4f}\n")
+                    f.write(f"  Std: {pd.Series(rewards).std():.4f}\n")
+            
+            print(f"📋 Summary report created: {summary_path}")
+            
+        except Exception as e:
+            print(f"⚠️ Error creating summary report: {e}")
+
+
 # Global logger instance
 _logger = None
 
@@ -234,7 +236,7 @@ def log_update(update_num: int, actor_loss: float, critic_loss: float,
                avg_advantage: float, episode: int):
     """Log update data (convenient wrapper)"""
     if _logger:
-        _logger.log_update(update_num, actor_loss, critic_loss, avg_advantage, episode)
+        _logger.log_update(update_num, actor_loss, critic_loss, episode)
 
 def finalize_logging():
     """Complete logging and save final files"""
@@ -242,7 +244,7 @@ def finalize_logging():
         _logger.save_all_logs(final=True)
 
 # Function to load and plot saved data
-def load_training_data(training_timestamp: str, category: str = "mars_craters"):
+def load_training_data(training_timestamp: str, category: str = "crater"):
     """Load training data from CSV files for plotting"""
     logs_dir = Path(__file__).parent / "logs" / f"{category}_{training_timestamp}"
     
@@ -273,7 +275,7 @@ def load_training_data(training_timestamp: str, category: str = "mars_craters"):
         print(f"❌ Error loading training data: {e}")
         return None
 
-def plot_from_csv(training_timestamp: str, category: str = "mars_craters"):
+def plot_from_csv(training_timestamp: str, category: str = "crater"):
     """Create plots from saved CSV data"""
     
     data = load_training_data(training_timestamp, category)
@@ -321,27 +323,18 @@ def plot_from_csv(training_timestamp: str, category: str = "mars_craters"):
     axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
     
-    # Moving average 
-    # TODO: replace with Best reward progress 
-    window = min(50, len(episodes_df) // 4)
-    if window > 1:
-        moving_avg = episodes_df['avg_reward'].rolling(window=window).mean()
-        axes[1, 1].plot(episodes_df['episode'], moving_avg, label=f'MA-{window}')
-        axes[1, 1].set_title('Learning Progress (Moving Average)')
-        axes[1, 1].set_xlabel('Episode')
-        axes[1, 1].set_ylabel('Avg Reward')
-        axes[1, 1].legend()
-        axes[1, 1].grid(True, alpha=0.3)
-    else:
-        axes[1, 1].text(0.5, 0.5, 'Not enough data\nfor moving average', 
-                       ha='center', va='center', transform=axes[1, 1].transAxes)
-        axes[1, 1].set_title('Learning Progress')
+    # Best reward progress
+    axes[1, 1].plot(episodes_df['episode'], episodes_df['best_reward'], label='Best Reward', color='green')
+    axes[1, 1].set_title('Best Reward Progress')
+    axes[1, 1].set_xlabel('Episode')
+    axes[1, 1].set_ylabel('Best Reward')
+    axes[1, 1].legend()
+    axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
     
     # Save plot
-    # TODO: Fix Path
-    plot_path = logs_dir / f"training_plot_{category}_{training_timestamp}_from_csv.png"
+    plot_path = Path(__file__).parent / "plots" / "training" / f"training_plot_{category}_{training_timestamp}_from_csv.png"
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.show()
     

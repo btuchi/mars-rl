@@ -17,14 +17,15 @@ from pathlib import Path
 from trajectory_recording import DiffusionSampler, extract_features_from_trajectory
 from diffusion_ppo_agent import DiffusionPPOAgent
 from diversity_reward import calculate_individual_diversity_rewards
-
+from diffusion_log_utils import CATEGORY
 class DiffusionModelTester:
     """Test trained diffusion models and compare with baseline"""
     
-    def __init__(self, device: str = "cuda", use_fp16: bool = False, training_timestamp: str = None):
+    def __init__(self, device: str = "cuda", use_fp16: bool = False, training_timestamp: str = None, category: str = CATEGORY):
         self.device = device
         self.use_fp16 = use_fp16
         self.training_timestamp = training_timestamp
+        self.category = category
         
         # ppo_diffusion/
         self.current_dir = Path(os.path.abspath(__file__)).parent
@@ -121,7 +122,7 @@ class DiffusionModelTester:
         
         # Look for model file with timestamp
         models_dir = self.current_dir / "models"
-        model_path = models_dir / f"diffusion_ppo_policy_{self.training_timestamp}.pth"
+        model_path = models_dir / f"{CATEGORY}_diffusion_ppo_policy_{self.training_timestamp}.pth"
 
         # Check if file exists first
         if not model_path.exists():
@@ -216,7 +217,7 @@ class DiffusionModelTester:
             safe_prompt = safe_prompt[:30]  # Limit length
             
             reward_str = f"_r{diversity_reward:.3f}" if diversity_reward is not None else ""
-            filename = f"{prefix}_{i+1:02d}_{safe_prompt}{reward_str}_{test_timestamp}.jpg"
+            filename = f"{prefix}_{i+1:02d}_{CATEGORY}_{safe_prompt}{reward_str}_{test_timestamp}.jpg"
             
             # Fix: Proper directory selection
             if prefix == 'trained':
@@ -324,15 +325,15 @@ class DiffusionModelTester:
         plt.tight_layout()
         
         plot_timestamp = time.strftime("%H%M%S")
-        comparison_path = self.comparison_dir / f"model_comparison_{plot_timestamp}.png"
+        comparison_path = self.comparison_dir / f"{self.category}_model_comparison_{plot_timestamp}.png"
         plt.savefig(comparison_path, dpi=150, bbox_inches='tight')
         plt.show()
         
         print(f"💾 Comparison plot saved: {comparison_path}")
     
-    def load_test_prompts(self, category: str):
+    def load_test_prompts(self):
         # Load prompts from prompts folder
-        test_prompts_file = os.path.join(self.current_dir, "prompts", "test", category)
+        test_prompts_file = os.path.join(self.current_dir, "prompts", "test", self.category)
         
         # Read prompts from file
         test_prompts = []
@@ -384,12 +385,11 @@ def get_latest_timestamp():
         print(f"🕐 Found latest timestamp: {latest_timestamp}")
         return latest_timestamp
 
-    
-
-
 
 def main():
     """Test a trained model"""
+
+    category = CATEGORY
 
     timestamp = get_latest_timestamp()
 
@@ -397,9 +397,8 @@ def main():
         print("❌ Cannot proceed without timestamp")
         return
 
-    tester = DiffusionModelTester(device="cuda", use_fp16=False, training_timestamp=timestamp)
+    tester = DiffusionModelTester(device="cuda", use_fp16=False, training_timestamp=timestamp, category=category)
     
-    category = "crater"
     
     # Test prompts
     test_prompts = tester.load_test_prompts(category)    

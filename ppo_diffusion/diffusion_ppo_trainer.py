@@ -7,7 +7,8 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from trajectory_recording import DiffusionSampler
 from diffusion_ppo_agent import DiffusionPPOAgent
-from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, REWARD_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
+from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, REWARD_LOG, VALUE_PREDICTION_LOG, RETURN_LOG, CATEGORY
+import diffusion_log_utils as log_utils
 from PIL import Image
 import torchvision.transforms as transforms
 
@@ -32,134 +33,180 @@ os.makedirs(plots_dir, exist_ok=True)
 
 timestamp = time.strftime("%Y%m%d%H%M%S")
 
-def main(category: str = "crater"):
-    """main training loop"""
+def main(category: str = CATEGORY):
+    """Main training loop with robust CSV logging"""
+    # Create training timestamp
     
-    print("=== DIFFUSION PPO TRAINING ===")
-    print(f"Using FP16: {USE_FP16}")  # Debug print
+    print(f"=== DIFFUSION PPO TRAINING - {timestamp} ===")
+    print(f"🎯 Training Category: {category}")
+
+    # Initialize CSV logger
+    logger = log_utils.initialize_logger(timestamp, category)
     
-    # Load reference features
     try:
-        npz_data = np.load(f"ppo_diffusion/reference_{category}_features.npz")
-        array_keys = list(npz_data.keys())
+        # Load reference features
+        try:
+            npz_data = np.load(f"ppo_diffusion/reference_{category}_features.npz")
+            array_keys = list(npz_data.keys())
+            
+            # Stack all individual feature vectors into a single array
+            ref_features_list = []
+            for key in array_keys:
+                ref_features_list.append(npz_data[key])
+            
+            ref_features = np.stack(ref_features_list)
+            print(f"Loaded reference features for testing: {ref_features.shape}")
+            npz_data.close()
+        except FileNotFoundError:
+            print("Error: Cannot test without reference features!")
+            return
+        except Exception as e:
+            print(f"Error loading reference features: {e}")
+            return
         
-        # Stack all individual feature vectors into a single array
-        ref_features_list = []
-        for key in array_keys:
-            ref_features_list.append(npz_data[key])
+        # Initialize diffusion sampler
+        print("Initializing diffusion sampler...")
+        sampler = DiffusionSampler(device=device, use_fp16=USE_FP16)
+        print(f"Sampler dtype: {sampler.dtype}")  # Debug print
         
-        ref_features = np.stack(ref_features_list)
-        print(f"Loaded reference features for testing: {ref_features.shape}")
-        npz_data.close()
-    except FileNotFoundError:
-        print("Error: Cannot test without reference features!")
-        return
+        # Initialize PPO agent
+        feature_dim = ref_features.shape[1] if len(ref_features.shape) > 1 else 512
+        agent = DiffusionPPOAgent(
+            sampler=sampler,
+            ref_features=ref_features,
+            batch_size=BATCH_SIZE,
+            feature_dim=feature_dim,
+            num_inference_steps=20,
+            images_per_prompt=4,
+            training_start=timestamp
+        )
+        # Load prompts from prompts folder
+        train_prompts_file = os.path.join(current_path, "prompts", "test", category)
+        
+        # Read prompts from file
+        train_prompts = []
+
+        with open(train_prompts_file, 'r') as f:
+            train_prompts = [line.strip() for line in f if line.strip()]
+        print(f"Loaded {len(train_prompts)} training prompts from {train_prompts_file}")
+
+        # Training tracking
+        REWARD_BUFFER = np.empty(shape=NUM_EPISODE)
+        best_reward = -float('inf')
+        episodes_since_update = 0
+        recent_rewards = []
+        update_counter = 0
+        
+        print("🚀 Starting Diffusion PPO training...")
+        print(f"📊 CSV logs will be saved every {logger.save_frequency} episodes")
+        print(f"Episodes per update: {EPISODES_PER_UPDATE}")
+        print(f"Images per episode: {BATCH_SIZE} (batch generation)")
+        print(f"Total episodes: {NUM_EPISODE}")
+        
+        # MAIN TRAINING LOOP
+        for episode_i in range(NUM_EPISODE):
+            print(f"\n=== Episode {episode_i+1}/{NUM_EPISODE} ===")
+            
+            # Sample random prompt
+            prompt = np.random.choice(train_prompts)
+            print(f"Prompt: '{prompt}'")
+            
+            # Generate batch of images for this prompt
+            trajectories, individual_rewards, avg_reward, prompt_features = agent.generate_batch_for_prompt(prompt)
+            
+            # Track episode reward (average of batch)
+            episode_reward = avg_reward
+            recent_rewards.append(episode_reward)
+            episodes_since_update += 1
+            REWARD_BUFFER[episode_i] = episode_reward
+            
+            print(f"Episode reward: {episode_reward:.4f}")
+            print(f"Individual rewards: {individual_rewards}")
+
+            # Track best reward
+            if episode_reward > best_reward:
+                best_reward = episode_reward
+                agent.save_policy()
+                print(f"🎉 New best reward: {best_reward:.4f}")
+            
+            BEST_REWARD_LOG.append(best_reward)
+            
+            # LOG EPISODE DATA TO CSV
+            log_utils.log_episode(
+                episode=episode_i+1,
+                prompt=prompt,
+                individual_rewards=individual_rewards.tolist(),
+                avg_reward=episode_reward,
+                best_reward=best_reward
+            )
+
+            print(f"📈 Episode reward: {episode_reward:.4f}")
+            print(f"📊 Individual rewards: {individual_rewards}")
+
+            # Update policy when we have enough episodes
+            if episodes_since_update >= EPISODES_PER_UPDATE:
+                print(f"\n🔄 Performing PPO update after {episodes_since_update} episodes...")
+                print(f"Replay buffer size: {len(agent.replay_buffer.trajectories)} trajectories")
+                
+                # Perform PPO update
+                agent.update()
+                episodes_since_update = 0
+                update_counter += 1
+                
+                # Print progress
+                if len(ACTOR_LOSS_LOG) > 0:
+                    avg_recent = np.mean(recent_rewards[-20:]) if len(recent_rewards) >= 20 else np.mean(recent_rewards)
+
+                    # LOG UPDATE DATA TO CSV
+                    log_utils.log_update(
+                        update_num=update_counter,
+                        actor_loss=ACTOR_LOSS_LOG[-1],
+                        critic_loss=CRITIC_LOSS_LOG[-1],
+                        episode=episode_i+1
+                    )
+
+                    print(f"  ✅ Actor Loss: {ACTOR_LOSS_LOG[-1]:.4f}")
+                    print(f"  ✅ Critic Loss: {CRITIC_LOSS_LOG[-1]:.4f}")
+                    print(f"  ✅ Avg Reward (last 20): {avg_recent:.4f}")
+            
+            # Progress logging every 10 episodes
+            if episode_i % 10 == 0 or episode_i == NUM_EPISODE - 1:
+                avg_reward_recent = np.mean(recent_rewards[-10:]) if len(recent_rewards) >= 10 else np.mean(recent_rewards)
+                print(f"📊 Progress - Episode {episode_i}: Current: {episode_reward:.4f}, Avg(10): {avg_reward_recent:.4f}, Best: {best_reward:.4f}")
+            
+            # Clear GPU memory
+            if episode_i % 10 == 0:
+                torch.cuda.empty_cache()
+        
+        # TRAINING COMPLETED (outside the loop!)
+        print(f"\n🏁 Training completed after {NUM_EPISODE} episodes!")
+        final_avg = np.mean(recent_rewards[-20:]) if len(recent_rewards) >= 20 else np.mean(recent_rewards)
+        print(f"Final average reward: {final_avg:.4f}")
+        print(f"Best reward achieved: {best_reward:.4f}")
+        print(f"Total PPO updates: {len(ACTOR_LOSS_LOG)}")
+
+        # Plot training results (if not interrupted)
+        plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, NUM_EPISODE-1, category=category)
+
+    except KeyboardInterrupt:
+        print(f"\n⚠️ Training interrupted by user (Ctrl+C)")
+        
     except Exception as e:
-        print(f"Error loading reference features: {e}")
-        return
+        print(f"\n❌ Training interrupted by error: {e}")
+        
+    finally:
+        # This will ALWAYS run, even if training is interrupted
+        print(f"\n💾 Finalizing logs...")
+        log_utils.finalize_logging()
     
-    # Initialize diffusion sampler
-    print("Initializing diffusion sampler...")
-    sampler = DiffusionSampler(device=device, use_fp16=USE_FP16)
-    print(f"Sampler dtype: {sampler.dtype}")  # Debug print
+    # Create plots from saved CSV data
+    try:
+        log_utils.plot_from_csv(timestamp, category)
+    except Exception as e:
+        print(f"⚠️ Could not create plots: {e}")
     
-    # Initialize PPO agent
-    feature_dim = ref_features.shape[1] if len(ref_features.shape) > 1 else 512
-    agent = DiffusionPPOAgent(
-        sampler=sampler,
-        ref_features=ref_features,
-        batch_size=BATCH_SIZE,
-        feature_dim=feature_dim,
-        num_inference_steps=20,
-        images_per_prompt=4,
-        training_start=timestamp
-    )
-    # Load prompts from prompts folder
-    train_prompts_file = os.path.join(current_path, "prompts", "test", category)
-    
-    # Read prompts from file
-    train_prompts = []
 
-    with open(train_prompts_file, 'r') as f:
-        train_prompts = [line.strip() for line in f if line.strip()]
-    print(f"Loaded {len(train_prompts)} training prompts from {train_prompts_file}")
-
-    # Training tracking
-    REWARD_BUFFER = np.empty(shape=NUM_EPISODE)
-    best_reward = -float('inf')
-    episodes_since_update = 0
-    recent_rewards = []
-    
-    print("Starting Diffusion PPO training...")
-    print(f"Episodes per update: {EPISODES_PER_UPDATE}")
-    print(f"Images per episode: 4 (batch generation)")
-    print(f"Total episodes: {NUM_EPISODE}")
-    
-    # MAIN TRAINING LOOP
-    for episode_i in range(NUM_EPISODE):
-        print(f"\n=== Episode {episode_i+1}/{NUM_EPISODE} ===")
-        
-        # Sample random prompt
-        prompt = np.random.choice(train_prompts)
-        print(f"Prompt: '{prompt}'")
-        
-        # Generate batch of images for this prompt
-        trajectories, individual_rewards, avg_reward, prompt_features = agent.generate_batch_for_prompt(prompt)
-        
-        # Track episode reward (average of batch)
-        episode_reward = avg_reward
-        recent_rewards.append(episode_reward)
-        episodes_since_update += 1
-        REWARD_BUFFER[episode_i] = episode_reward
-        
-        print(f"Episode reward: {episode_reward:.4f}")
-        print(f"Individual rewards: {individual_rewards}")
-        
-        # Update policy when we have enough episodes
-        if episodes_since_update >= EPISODES_PER_UPDATE:
-            print(f"\n🔄 Performing PPO update after {episodes_since_update} episodes...")
-            print(f"Replay buffer size: {len(agent.replay_buffer.trajectories)} trajectories")
-            
-            # Perform PPO update
-            agent.update()
-            episodes_since_update = 0
-            
-            # Print progress
-            if len(ACTOR_LOSS_LOG) > 0:
-                avg_recent = np.mean(recent_rewards[-20:]) if len(recent_rewards) >= 20 else np.mean(recent_rewards)
-                print(f"  ✅ Actor Loss: {ACTOR_LOSS_LOG[-1]:.4f}")
-                print(f"  ✅ Critic Loss: {CRITIC_LOSS_LOG[-1]:.4f}")
-                print(f"  ✅ Avg Reward (last 20): {avg_recent:.4f}")
-        
-        # Track best reward
-        if episode_reward > best_reward:
-            best_reward = episode_reward
-            agent.save_policy()
-            print(f"🎉 New best reward: {best_reward:.4f}")
-        
-        BEST_REWARD_LOG.append(best_reward)
-        
-        # Progress logging every 10 episodes
-        if episode_i % 10 == 0 or episode_i == NUM_EPISODE - 1:
-            avg_reward_recent = np.mean(recent_rewards[-10:]) if len(recent_rewards) >= 10 else np.mean(recent_rewards)
-            print(f"📊 Progress - Episode {episode_i}: Current: {episode_reward:.4f}, Avg(10): {avg_reward_recent:.4f}, Best: {best_reward:.4f}")
-        
-        # Clear GPU memory
-        if episode_i % 10 == 0:
-            torch.cuda.empty_cache()
-    
-    # TRAINING COMPLETED (outside the loop!)
-    print(f"\n🏁 Training completed after {NUM_EPISODE} episodes!")
-    final_avg = np.mean(recent_rewards[-20:]) if len(recent_rewards) >= 20 else np.mean(recent_rewards)
-    print(f"Final average reward: {final_avg:.4f}")
-    print(f"Best reward achieved: {best_reward:.4f}")
-    print(f"Total PPO updates: {len(ACTOR_LOSS_LOG)}")
-    
-    # Plot training results
-    plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, NUM_EPISODE-1)
-
-
-def plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, final_episode=None):
+def plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, final_episode=None, category=CATEGORY):
     """
     Plotting function adapted from vanilla PPO but for diffusion metrics
     """
@@ -297,7 +344,7 @@ def plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST
     
     # Save plot
     plots_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "plots/training")
-    plot_path = os.path.join(plots_dir, f"diffusion_ppo_training_{timestamp}.png")
+    plot_path = os.path.join(plots_dir, f"{category}_diffusion_ppo_training_{timestamp}.png")
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.show()
     
@@ -315,7 +362,7 @@ def plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST
 
 if __name__ == "__main__":
 
-    category = "crater"
+    category = CATEGORY
 
     # Run training
     main(category)

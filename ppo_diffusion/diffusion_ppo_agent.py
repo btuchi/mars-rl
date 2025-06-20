@@ -9,7 +9,7 @@ from PIL import Image
 from typing import List, Optional, Tuple
 from trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
 from diversity_reward import calculate_individual_diversity_rewards
-from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
+from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, VALUE_PREDICTION_LOG, RETURN_LOG, CATEGORY
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Computing device: {device}")
@@ -556,7 +556,9 @@ class DiffusionPPOAgent:
         
         # Normalize advantages
         memo_advantages = (memo_advantages - memo_advantages.mean()) / (memo_advantages.std() + 1e-8)
-        
+        avg_advantage = memo_advantages.mean()
+        print(f"Avg Advantage: {avg_advantage:.4f}")
+
         # Compute returns
         memo_returns = memo_advantages + memo_values
         
@@ -674,7 +676,7 @@ class DiffusionPPOAgent:
         """Save the trained policy (UNet weights)"""
         models_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "models")
         os.makedirs(models_dir, exist_ok=True)
-        policy_path = os.path.join(models_dir, f"diffusion_ppo_policy_{self.training_start}.pth")
+        policy_path = os.path.join(models_dir, f"{CATEGORY}_diffusion_ppo_policy_{self.training_start}.pth")
 
         # Handle DataParallel case for saving
         if hasattr(self.actor.unet, 'module'):
