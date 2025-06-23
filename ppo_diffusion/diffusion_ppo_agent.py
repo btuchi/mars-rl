@@ -408,7 +408,7 @@ class DiffusionPPOAgent:
         if save_samples is not None:
             should_save = save_samples
         elif self.save_samples and episode is not None:
-            should_save = (episode % 5 == 0)  # Save every 2 episodes
+            should_save = (episode % 5 == 0)  # Save every 5 episodes
 
         # Get prompt features and value (same for all images from this prompt)
         prompt_features = self.get_prompt_features(prompt)
@@ -473,7 +473,6 @@ class DiffusionPPOAgent:
             
             torch.cuda.empty_cache()
             gc.collect()
-            
         
         # Calculate individual diversity rewards using your efficient function
         individual_rewards = self.reward_function.calculate_batch_rewards(trajectories)

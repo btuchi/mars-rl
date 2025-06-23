@@ -45,6 +45,10 @@ rsync -avzhP --update \
     --include="plots/**" \
     --include="images/" \
     --include="images/**" \
+    --include="logs/" \
+    --include="logs/**" \
+    --include="images/" \
+    --include="images/**" \
     --exclude="*" \
     "${BRIDGES2_USER}@${BRIDGES2_HOST}:/ocean/projects/eng240004p/btuchi/BRYCE/RL/ppo_diffusion/" "${LOCAL_DIR}/ppo_diffusion/"
 
