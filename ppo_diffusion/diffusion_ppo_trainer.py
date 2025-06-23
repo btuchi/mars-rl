@@ -5,6 +5,8 @@ import time
 import os.path
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import traceback
+from pathlib import Path
 from trajectory_recording import DiffusionSampler
 from diffusion_ppo_agent import DiffusionPPOAgent
 from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, REWARD_LOG, VALUE_PREDICTION_LOG, RETURN_LOG, CATEGORY
@@ -46,7 +48,7 @@ def main(category: str = CATEGORY):
     try:
         # Load reference features
         try:
-            npz_data = np.load(f"ppo_diffusion/reference_{category}_features.npz")
+            npz_data = np.load(f"{Path(__file__).parent}/reference_{category}_features.npz")
             array_keys = list(npz_data.keys())
             
             # Stack all individual feature vectors into a single array
@@ -81,13 +83,22 @@ def main(category: str = CATEGORY):
             training_start=timestamp
         )
         # Load prompts from prompts folder
-        train_prompts_file = os.path.join(current_path, "prompts", "test", category)
+        train_prompts_file = os.path.join(current_path, "prompts", "train", f"{category}.txt")
         
         # Read prompts from file
         train_prompts = []
 
-        with open(train_prompts_file, 'r') as f:
-            train_prompts = [line.strip() for line in f if line.strip()]
+        if os.path.exists(train_prompts_file):
+            with open(train_prompts_file, 'r') as f:
+                train_prompts = [line.strip() for line in f if line.strip()]
+        else:
+            print(f"❌ Training prompts file not found: {train_prompts_file}")
+            return
+
+        if not train_prompts:
+            print(f"❌ No training prompts found in file: {train_prompts_file}")
+            return
+
         print(f"Loaded {len(train_prompts)} training prompts from {train_prompts_file}")
 
         # Training tracking
@@ -192,7 +203,9 @@ def main(category: str = CATEGORY):
         print(f"\n⚠️ Training interrupted by user (Ctrl+C)")
         
     except Exception as e:
+        tb = traceback.format_exc()
         print(f"\n❌ Training interrupted by error: {e}")
+        print(f"Traceback:\n{tb}")
         
     finally:
         # This will ALWAYS run, even if training is interrupted

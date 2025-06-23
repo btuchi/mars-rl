@@ -232,8 +232,7 @@ def log_episode(episode: int, prompt: str, individual_rewards: list,
     if _logger:
         _logger.log_episode(episode, prompt, individual_rewards, avg_reward, best_reward)
 
-def log_update(update_num: int, actor_loss: float, critic_loss: float, 
-               avg_advantage: float, episode: int):
+def log_update(update_num: int, actor_loss: float, critic_loss: float, episode: int):
     """Log update data (convenient wrapper)"""
     if _logger:
         _logger.log_update(update_num, actor_loss, critic_loss, episode)

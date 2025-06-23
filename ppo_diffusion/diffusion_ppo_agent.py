@@ -4,7 +4,9 @@ import torch.optim as optim
 import numpy as np
 import clip
 import os.path
+from pathlib import Path
 import torchvision.transforms as transforms
+import time
 from PIL import Image
 from typing import List, Optional, Tuple
 from trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
@@ -247,6 +249,7 @@ class DiffusionPPOAgent:
         # Add dtype from sampler
         self.dtype = sampler.dtype if hasattr(sampler, 'dtype') else torch.float32
         self.device = device
+        self.training_start = training_start
 
         print(f"PPO Agent using dtype: {self.dtype}")  # Debug print
         
@@ -296,28 +299,27 @@ class DiffusionPPOAgent:
         if self.save_samples:
             self.setup_sample_saving()
         
-        self.training_start = training_start
+        
     
     def setup_sample_saving(self):
         """Set up directories and tracking for sample image saving"""
         # ppo_diffusion/
-        current_path = os.path.abspath(__file__)
-
-        self.samples_dir = os.path.join(current_path, f"images/while_training/{self.training_timestamp}")
+        current_path = Path(__file__).parent
+        self.samples_dir = current_path / f"images/while_training/{self.training_start}"
         os.makedirs(self.samples_dir, exist_ok=True)
         
         # Also create a metadata file
         self.create_training_metadata()
         
         print(f"📁 Sample images will be saved to: {self.samples_dir}")
-        print(f"🕐 Training timestamp: {self.training_timestamp}")
+        print(f"🕐 Training timestamp: {self.training_start}")
 
     def create_training_metadata(self):
         """Create a metadata file with training information"""
         metadata_path = self.samples_dir / "training_info.txt"
         
         with open(metadata_path, 'w') as f:
-            f.write(f"Training Session: {self.training_timestamp}\n")
+            f.write(f"Training Session: {self.training_start}\n")
             f.write(f"Started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Images per prompt: {self.images_per_prompt}\n")
             f.write(f"Device: {self.device}\n")
