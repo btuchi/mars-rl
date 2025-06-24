@@ -548,7 +548,139 @@ class DiffusionPPOAgent:
             advantages.insert(0, gae)
         
         return np.array(advantages)
-    
+
+
+    #########################
+    #### Gradient Flow Tests####
+    #########################
+    # Test 1: Direct UNet Gradient Test
+    def test_direct_unet_gradients(self):
+        """Test if UNet can compute gradients at all"""
+        print("🧪 TEST 1: Direct UNet Gradient Test")
+        
+        unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
+        unet.train()
+        
+        # Create simple inputs
+        latent = torch.randn(1, 4, 64, 64, device=self.device, requires_grad=True)
+        timestep = torch.tensor([500], device=self.device)
+        text_emb = torch.randn(1, 77, 768, device=self.device)
+        
+        # Forward pass
+        output = unet(latent, timestep, text_emb)[0]
+        loss = output.mean()
+        
+        # Clear and compute gradients
+        unet.zero_grad()
+        loss.backward()
+        
+        # Check results
+        grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
+        grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
+        
+        print(f"   Direct UNet test - Params with grads: {grad_count}")
+        print(f"   Direct UNet test - Grad norm: {grad_norm:.6f}")
+        
+        unet.zero_grad()
+        return grad_count > 0
+
+    # Test 2: Policy Network Gradient Test  
+    def test_policy_network_gradients(self):
+        """Test if DiffusionPolicyNetwork maintains gradients"""
+        print("🧪 TEST 2: Policy Network Gradient Test")
+        
+        # Generate a trajectory
+        prompt = "test crater"
+        trajectory, log_prob = self.actor.select_trajectory(prompt)
+        
+        print(f"   Log prob value: {log_prob.item():.8f}")
+        print(f"   Log prob requires_grad: {log_prob.requires_grad}")
+        print(f"   Log prob grad_fn: {log_prob.grad_fn}")
+        
+        # Test backward through log_prob
+        unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
+        unet.zero_grad()
+        
+        loss = -log_prob
+        loss.backward()
+        
+        # Check results
+        grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
+        grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
+        
+        print(f"   Policy network test - Params with grads: {grad_count}")
+        print(f"   Policy network test - Grad norm: {grad_norm:.6f}")
+        
+        unet.zero_grad()
+        return grad_count > 0
+
+    # Test 3: Stored vs Fresh Trajectory Test
+    def test_stored_vs_fresh_trajectories(self):
+        """Test difference between stored and fresh log probabilities"""
+        print("🧪 TEST 3: Stored vs Fresh Trajectory Test")
+        
+        prompt = "test crater"
+        
+        # Generate fresh trajectory
+        fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
+        print(f"   Fresh log prob: {fresh_log_prob.item():.8f}, requires_grad: {fresh_log_prob.requires_grad}")
+        
+        # Test fresh backward
+        unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
+        unet.zero_grad()
+        fresh_loss = -fresh_log_prob
+        fresh_loss.backward()
+        
+        fresh_grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
+        fresh_grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
+        
+        print(f"   Fresh trajectory - Params with grads: {fresh_grad_count}")
+        print(f"   Fresh trajectory - Grad norm: {fresh_grad_norm:.6f}")
+        
+        # Now test recalculated log prob (simulating your PPO update)
+        unet.zero_grad()
+        recalc_log_prob = self.actor.calculate_log_prob(fresh_trajectory)
+        print(f"   Recalc log prob: {recalc_log_prob.item():.8f}, requires_grad: {recalc_log_prob.requires_grad}")
+        
+        recalc_loss = -recalc_log_prob
+        recalc_loss.backward()
+        
+        recalc_grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
+        recalc_grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
+        
+        print(f"   Recalc trajectory - Params with grads: {recalc_grad_count}")
+        print(f"   Recalc trajectory - Grad norm: {recalc_grad_norm:.6f}")
+        
+        unet.zero_grad()
+        return fresh_grad_count > 0, recalc_grad_count > 0
+
+    # Add this to your DiffusionPPOAgent class and call it before update():
+    def run_gradient_tests(self):
+        """Run all gradient flow tests"""
+        print("="*60)
+        print("🔬 RUNNING GRADIENT FLOW TESTS")
+        print("="*60)
+        
+        test1_pass = self.test_direct_unet_gradients()
+        test2_pass = self.test_policy_network_gradients()  
+        test3_fresh, test3_recalc = self.test_stored_vs_fresh_trajectories()
+        
+        print("\n📊 TEST RESULTS:")
+        print(f"   Direct UNet: {'✅ PASS' if test1_pass else '❌ FAIL'}")
+        print(f"   Policy Network: {'✅ PASS' if test2_pass else '❌ FAIL'}")
+        print(f"   Fresh Trajectory: {'✅ PASS' if test3_fresh else '❌ FAIL'}")
+        print(f"   Recalc Trajectory: {'✅ PASS' if test3_recalc else '❌ FAIL'}")
+        
+        if test1_pass and not test2_pass:
+            print("\n🎯 DIAGNOSIS: Issue in DiffusionPolicyNetwork or trajectory recording")
+        elif test1_pass and test2_pass and test3_fresh and not test3_recalc:
+            print("\n🎯 DIAGNOSIS: Issue with calculate_log_prob method")
+        elif not test1_pass:
+            print("\n🎯 DIAGNOSIS: Issue with UNet setup (DataParallel, optimizer, etc.)")
+        
+        print("="*60)
+
+
     def update(self):
         """
         PPO update for diffusion models
@@ -560,6 +692,9 @@ class DiffusionPPOAgent:
             return
         
         print("Starting PPO update...")
+
+        # Run gradient flow tests before update
+        self.run_gradient_tests()
 
         print(f"🔍 UNet training mode: {self.actor.unet.training}")
 
@@ -640,17 +775,23 @@ class DiffusionPPOAgent:
                 for idx in batch:
                     # Get the trajectory and regenerate log prob with current actor (maintains gradients)
                     trajectory = memo_trajectories[idx]
-                    current_log_prob = self.actor.calculate_log_prob(trajectory)
-                    current_log_probs.append(current_log_prob)
+                    prompt = memo_prompts[idx]
+
+                    # Generate FRESH trajectory with current policy (not stored one)
+                    fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
+                    current_log_probs.append(fresh_log_prob)
 
                 current_log_probs_tensor = torch.stack(current_log_probs)
-                current_log_probs_tensor = current_log_probs_tensor.to(self.dtype)
+
+                old_log_probs_batch = torch.tensor([memo_log_probs[idx] for idx in batch], 
+                                          dtype=self.dtype, device=self.device)
+                # current_log_probs_tensor = current_log_probs_tensor.to(self.dtype)
 
                 # Check gradient requirements
-                print(f"🔍 Current log probs require grad: {[lp.requires_grad for lp in current_log_probs[:3]]}")
+                # print(f"🔍 Current log probs require grad: {[lp.requires_grad for lp in current_log_probs[:3]]}")
                 
                 # Calculate ratio
-                ratio = torch.exp(current_log_probs_tensor - old_log_probs[batch])
+                ratio = torch.exp(current_log_probs_tensor - old_log_probs_batch)
                 
                 # Batch advantages
                 # TODO: Log advantages
