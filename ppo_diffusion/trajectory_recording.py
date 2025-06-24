@@ -72,14 +72,20 @@ class DiffusionSampler:
             self.pipe.vae.to(torch.float32)
             self.pipe.text_encoder.to(torch.float32)
 
-        # Apply DataParallel for 2-GPU setup (do this AFTER device movement)
+        # IMPROVED DataParallel setup for H100s
         if torch.cuda.device_count() > 1:
-            print(f"Using DataParallel across {torch.cuda.device_count()} GPUs")
-            self.pipe.unet = nn.DataParallel(self.pipe.unet)
-            # Note: We skip CPU offload optimizations when using DataParallel
-            # as they conflict with multi-GPU setup
+            print(f"Using DataParallel across {torch.cuda.device_count()} H100 GPUs")
+            
+            # Set memory fraction to prevent fragmentation
+            for i in range(torch.cuda.device_count()):
+                torch.cuda.set_per_process_memory_fraction(0.85, device=i)  # Use 85% of each GPU
+            
+            # Use DataParallel with specific device IDs
+            device_ids = list(range(torch.cuda.device_count()))
+            self.pipe.unet = nn.DataParallel(self.pipe.unet, device_ids=device_ids)
+            
+            # Don't use CPU offload with DataParallel (conflicts)
         else:
-            # Single GPU - can use CPU offload
             self.pipe.enable_model_cpu_offload()
             self.pipe.enable_sequential_cpu_offload()
         
@@ -101,9 +107,10 @@ class DiffusionSampler:
         self.vae.eval()
         self.text_encoder.eval()
 
-        # Additional memory optimizations for 2-GPU setup
+        # H100 optimizations
         torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
         torch.backends.cuda.matmul.allow_tf32 = True  # Use TF32 for faster computation
+        torch.backends.cudnn.allow_tf32 = True
             
     def encode_prompt(self, prompt: str, batch_size: int = 1) -> torch.Tensor:
         """

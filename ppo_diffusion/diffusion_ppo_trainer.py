@@ -1,3 +1,23 @@
+
+def setup_h100_optimizations():
+    """Setup H100-specific optimizations"""
+    import os
+    
+    # Environment variables for H100s
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,roundup_power2_divisions:16'
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Async launches
+    
+    # Set memory fractions for each GPU
+    for i in range(torch.cuda.device_count()):
+        torch.cuda.set_per_process_memory_fraction(0.85, device=i)
+    
+    # Enable optimizations
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    
+    print("H100 optimizations enabled")
+
 # diffusion_ppo_trainer.py
 import torch
 import numpy as np
@@ -13,6 +33,8 @@ from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG
 import diffusion_log_utils as log_utils
 from PIL import Image
 import torchvision.transforms as transforms
+
+setup_h100_optimizations()
 
 # Diffusion PPO Training Parameters (equivalent to vanilla PPO structure)
 NUM_EPISODE = 1000              # Total number of "episodes" (trajectory generations)
@@ -34,6 +56,7 @@ os.makedirs(model_dir, exist_ok=True)
 os.makedirs(plots_dir, exist_ok=True)
 
 timestamp = time.strftime("%Y%m%d%H%M%S")
+
 
 def main(category: str = CATEGORY):
     """Main training loop with robust CSV logging"""

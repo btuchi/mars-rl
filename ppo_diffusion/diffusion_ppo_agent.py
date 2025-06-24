@@ -757,109 +757,196 @@ class DiffusionPPOAgent:
         # Accumulate losses
         all_actor_losses = []
         all_critic_losses = []
-        
-        # Train for multiple epochs
+
+        chunk_size = 1  # Process one trajectory at a time for H100s
+
         for epoch_i in range(self.EPOCH):
-            for batch in batches:
-                if len(batch) == 0:
+            # Process trajectories in chunks
+            for start_idx in range(0, len(memo_trajectories), chunk_size):
+                end_idx = min(start_idx + chunk_size, len(memo_trajectories))
+                chunk_indices = list(range(start_idx, end_idx))
+                
+                # Clear cache before each chunk
+                torch.cuda.empty_cache()
+                
+                try:
+                    # Process this chunk
+                    chunk_actor_losses = []
+                    chunk_critic_losses = []
+                    
+                    for idx in chunk_indices:
+                        # Get data for this trajectory
+                        prompt = memo_prompts[idx]
+                        advantage = memo_advantages[idx]
+                        return_val = memo_returns[idx]
+                        old_log_prob = memo_log_probs[idx]
+                        features = memo_features[idx]
+                        
+                        # Convert to tensors
+                        advantage_tensor = torch.tensor(advantage, dtype=self.dtype, device=self.device)
+                        return_tensor = torch.tensor(return_val, dtype=self.dtype, device=self.device)
+                        old_log_prob_tensor = torch.tensor(old_log_prob, dtype=self.dtype, device=self.device)
+                        features_tensor = torch.from_numpy(features).to(device=self.device, dtype=self.dtype).unsqueeze(0)
+                        
+                        # Generate fresh trajectory with current policy
+                        # This is where the OOM was happening - now we do it one at a time
+                        fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
+                        
+                        # Calculate ratio
+                        ratio = torch.exp(fresh_log_prob - old_log_prob_tensor)
+                        
+                        # PPO clipped objective
+                        surr1 = ratio * advantage_tensor
+                        surr2 = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP) * advantage_tensor
+                        actor_loss = -torch.min(surr1, surr2)
+                        
+                        # Critic loss
+                        value_pred = self.critic(features_tensor).squeeze()
+                        critic_loss = nn.MSELoss()(value_pred, return_tensor)
+                        
+                        # Update actor
+                        self.actor_optimizer.zero_grad()
+                        actor_loss.backward()
+                        
+                        # Gradient clipping for DataParallel
+                        if hasattr(self.actor.unet, 'module'):
+                            torch.nn.utils.clip_grad_norm_(self.actor.unet.module.parameters(), max_norm=0.5)
+                        else:
+                            torch.nn.utils.clip_grad_norm_(self.actor.unet.parameters(), max_norm=0.5)
+                        
+                        self.actor_optimizer.step()
+                        
+                        # Update critic
+                        self.critic_optimizer.zero_grad()
+                        critic_loss.backward()
+                        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
+                        self.critic_optimizer.step()
+                        
+                        # Store losses
+                        chunk_actor_losses.append(actor_loss.item())
+                        chunk_critic_losses.append(critic_loss.item())
+                        
+                        # Immediate cleanup
+                        del fresh_trajectory, fresh_log_prob, ratio, surr1, surr2
+                        del actor_loss, critic_loss, value_pred
+                        del advantage_tensor, return_tensor, old_log_prob_tensor, features_tensor
+                    
+                    # Add chunk losses to total
+                    all_actor_losses.extend(chunk_actor_losses)
+                    all_critic_losses.extend(chunk_critic_losses)
+                    
+                except torch.cuda.OutOfMemoryError as e:
+                    print(f"⚠️ OOM in chunk {start_idx}-{end_idx}, clearing cache and continuing...")
+                    torch.cuda.empty_cache()
+                    import gc
+                    gc.collect()
                     continue
                 
-                # Current policy log probabilities
-                current_log_probs = []
-
-                # NO REGENERATION! Use stored tensors with gradients
-                print(f"  Using stored gradients for {len(batch)} trajectories...")
-                
-                # Get current log probs from stored tensors (they still have gradients!)
-                current_log_probs = []
-                for idx in batch:
-                    # Get the trajectory and regenerate log prob with current actor (maintains gradients)
-                    trajectory = memo_trajectories[idx]
-                    prompt = memo_prompts[idx]
-
-                    # Generate FRESH trajectory with current policy (not stored one)
-                    fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
-                    current_log_probs.append(fresh_log_prob)
-
-                current_log_probs_tensor = torch.stack(current_log_probs)
-
-                old_log_probs_batch = torch.tensor([memo_log_probs[idx] for idx in batch], 
-                                          dtype=self.dtype, device=self.device)
-                # current_log_probs_tensor = current_log_probs_tensor.to(self.dtype)
-
-                # Check gradient requirements
-                # print(f"🔍 Current log probs require grad: {[lp.requires_grad for lp in current_log_probs[:3]]}")
-                
-                # Calculate ratio
-                ratio = torch.exp(current_log_probs_tensor - old_log_probs_batch)
-                
-                # Batch advantages
-                # TODO: Log advantages
-                batch_advantages = memo_advantages_tensor[batch]
-                print("Batch advantages mean:", batch_advantages.mean().item())
-                
-                # PPO clipped objective
-                surr1 = ratio * batch_advantages
-                surr2 = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP) * batch_advantages
-
-                # TODO: Print surrogates
-                print("surr1 mean:", surr1.mean().item())
-                print("surr2 mean:", surr2.mean().item())
-                
-                # Actor loss (no entropy for diffusion models - they have inherent stochasticity)
-                # TODO: Check
-                actor_loss = -torch.min(surr1, surr2).mean()
-                
-                # Critic loss
-                batch_values = self.critic(memo_features_tensor[batch]).squeeze()
-                batch_returns = memo_returns_tensor[batch]
-
-                # Ensure both tensors have the same dtype
-                batch_values = batch_values.to(self.dtype)
-                batch_returns = batch_returns.to(self.dtype)
-                
-                critic_loss = nn.MSELoss()(batch_values, batch_returns)
-                
-                # Store losses
-                all_actor_losses.append(actor_loss.item())
-                all_critic_losses.append(critic_loss.item())
-                
-                # Update actor (UNet)
-                self.actor_optimizer.zero_grad()
-
-                print(f"Actor loss requires_grad: {actor_loss.requires_grad}")
-                print(f"Actor loss value: {actor_loss.item()}")
-
-                actor_loss.backward()
-
-                total_grad_norm = 0
-                param_count = 0
-                for param in self.actor.unet.parameters():
-                    if param.grad is not None:
-                        total_grad_norm += param.grad.norm().item()
-                        param_count += 1
-                print(f"Total gradient norm: {total_grad_norm}, Params with gradients: {param_count}")
-
-
-                # Handle gradient clipping for DataParallel
-                if hasattr(self.actor.unet, 'module'):
-                    torch.nn.utils.clip_grad_norm_(self.actor.unet.module.parameters(), max_norm=0.5)
-                else:
-                    torch.nn.utils.clip_grad_norm_(self.actor.unet.parameters(), max_norm=0.5)
-                
-                self.actor_optimizer.step()
-
-                # Update critic
-                self.critic_optimizer.zero_grad()
-                critic_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
-                self.critic_optimizer.step()
-
-                # Clear gradients and memory after each batch
-                del current_log_probs, fresh_trajectory, fresh_log_prob
+                # Force cleanup after each chunk
                 torch.cuda.empty_cache()
-                import gc
-                gc.collect()
+        
+        # Train for multiple epochs
+        # for epoch_i in range(self.EPOCH):
+        #     for batch in batches:
+        #         if len(batch) == 0:
+        #             continue
+                
+        #         # Current policy log probabilities
+        #         current_log_probs = []
+
+        #         # NO REGENERATION! Use stored tensors with gradients
+        #         print(f"  Using stored gradients for {len(batch)} trajectories...")
+                
+        #         # Get current log probs from stored tensors (they still have gradients!)
+        #         current_log_probs = []
+        #         for idx in batch:
+        #             # Get the trajectory and regenerate log prob with current actor (maintains gradients)
+        #             trajectory = memo_trajectories[idx]
+        #             prompt = memo_prompts[idx]
+
+        #             # Generate FRESH trajectory with current policy (not stored one)
+        #             fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
+        #             current_log_probs.append(fresh_log_prob)
+
+        #         current_log_probs_tensor = torch.stack(current_log_probs)
+
+        #         old_log_probs_batch = torch.tensor([memo_log_probs[idx] for idx in batch], 
+        #                                   dtype=self.dtype, device=self.device)
+        #         # current_log_probs_tensor = current_log_probs_tensor.to(self.dtype)
+
+        #         # Check gradient requirements
+        #         # print(f"🔍 Current log probs require grad: {[lp.requires_grad for lp in current_log_probs[:3]]}")
+                
+        #         # Calculate ratio
+        #         ratio = torch.exp(current_log_probs_tensor - old_log_probs_batch)
+                
+        #         # Batch advantages
+        #         # TODO: Log advantages
+        #         batch_advantages = memo_advantages_tensor[batch]
+        #         print("Batch advantages mean:", batch_advantages.mean().item())
+                
+        #         # PPO clipped objective
+        #         surr1 = ratio * batch_advantages
+        #         surr2 = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP) * batch_advantages
+
+        #         # TODO: Print surrogates
+        #         print("surr1 mean:", surr1.mean().item())
+        #         print("surr2 mean:", surr2.mean().item())
+                
+        #         # Actor loss (no entropy for diffusion models - they have inherent stochasticity)
+        #         # TODO: Check
+        #         actor_loss = -torch.min(surr1, surr2).mean()
+                
+        #         # Critic loss
+        #         batch_values = self.critic(memo_features_tensor[batch]).squeeze()
+        #         batch_returns = memo_returns_tensor[batch]
+
+        #         # Ensure both tensors have the same dtype
+        #         batch_values = batch_values.to(self.dtype)
+        #         batch_returns = batch_returns.to(self.dtype)
+                
+        #         critic_loss = nn.MSELoss()(batch_values, batch_returns)
+                
+        #         # Store losses
+        #         all_actor_losses.append(actor_loss.item())
+        #         all_critic_losses.append(critic_loss.item())
+                
+        #         # Update actor (UNet)
+        #         self.actor_optimizer.zero_grad()
+
+        #         print(f"Actor loss requires_grad: {actor_loss.requires_grad}")
+        #         print(f"Actor loss value: {actor_loss.item()}")
+
+        #         actor_loss.backward()
+
+        #         total_grad_norm = 0
+        #         param_count = 0
+        #         for param in self.actor.unet.parameters():
+        #             if param.grad is not None:
+        #                 total_grad_norm += param.grad.norm().item()
+        #                 param_count += 1
+        #         print(f"Total gradient norm: {total_grad_norm}, Params with gradients: {param_count}")
+
+
+        #         # Handle gradient clipping for DataParallel
+        #         if hasattr(self.actor.unet, 'module'):
+        #             torch.nn.utils.clip_grad_norm_(self.actor.unet.module.parameters(), max_norm=0.5)
+        #         else:
+        #             torch.nn.utils.clip_grad_norm_(self.actor.unet.parameters(), max_norm=0.5)
+                
+        #         self.actor_optimizer.step()
+
+        #         # Update critic
+        #         self.critic_optimizer.zero_grad()
+        #         critic_loss.backward()
+        #         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
+        #         self.critic_optimizer.step()
+
+        #         # Clear gradients and memory after each batch
+        #         del current_log_probs, fresh_trajectory, fresh_log_prob
+        #         torch.cuda.empty_cache()
+        #         import gc
+        #         gc.collect()
                     
         # Log losses
         if all_actor_losses:
