@@ -46,6 +46,7 @@ class DiffusionPolicyNetwork(nn.Module):
             num_inference_steps=self.num_inference_steps
         )
     
+    # TODO: Track log probabilities of each step
     def calculate_log_prob(self, trajectory: DiffusionTrajectory) -> torch.Tensor:
         """
         Calculate log probability of trajectory (equivalent to action log prob)
@@ -54,19 +55,25 @@ class DiffusionPolicyNetwork(nn.Module):
         Return
             - the log probability this trajectory happens to generate images
         """
-        log_probs = []
+        if trajectory.total_log_prob is not None:
+            print("log probability from trajectory:", trajectory.total_log_prob)
+            return trajectory.total_log_prob
+        else:
 
-        # Each step has its own log probability
-        for step in trajectory.steps:
-            # Ensure log_prob is a tensor with gradients
-            if isinstance(step.log_prob, torch.Tensor):
-                log_probs.append(step.log_prob)
-            else:
-                # Convert to tensor if needed
-                log_probs.append(torch.tensor(step.log_prob, requires_grad=True))
-        
-        # Total log probability = sum of all steps
-        return torch.stack(log_probs).sum()
+            log_probs = []
+
+            # Each step has its own log probability
+            for step in trajectory.steps:
+                # Ensure log_prob is a tensor with gradients
+                print("log probability:", step.log_prob)
+                if isinstance(step.log_prob, torch.Tensor):
+                    log_probs.append(step.log_prob)
+                else:
+                    # Convert to tensor if needed
+                    log_probs.append(torch.tensor(step.log_prob, requires_grad=True))
+            
+            # Total log probability = sum of all steps
+            return torch.stack(log_probs).sum()
     
     def select_trajectory(self, prompt: str) -> Tuple[DiffusionTrajectory, torch.Tensor]:
         """
@@ -94,6 +101,9 @@ class DiffusionValueNetwork(nn.Module):
     Output:
         - Scalar value V(prompt): expected diversity reward for this prompt
     """
+    # TODO: More layers (5-6)?
+    # TODO: Hidden dimensions slowly scaling down (1024 -> 512 -> 256 -> 128)?
+    # TODO: Change activation?
     def __init__(self, feature_dim: int = 512, hidden_dim: int = 256):
         super(DiffusionValueNetwork, self).__init__()
         
@@ -255,10 +265,13 @@ class DiffusionPPOAgent:
         
         # PPO hyperparameters (same as vanilla PPO)
         
-        self.LR_ACTOR = 3e-5       # Lower for diffusion models
-        self.LR_CRITIC = 3e-4     # Lower for diffusion models
+        # TODO: Try changing learning rates
+        # self.LR_ACTOR = 3e-5       # Lower for diffusion models
+        # self.LR_CRITIC = 3e-4     # Lower for diffusion models
+        self.LR_ACTOR = 0.001       # Lower for diffusion models
+        self.LR_CRITIC = 0.001     # Lower for diffusion models
         
-        self.GAMMA = 1.0           # Usually 1.0 for diffusion (reward only at end)
+        self.GAMMA = 0.9           # Usually 1.0 for diffusion (reward only at end)
         self.LAMBDA = 0.95         # Same GAE parameter
         
         self.EPOCH = 1
@@ -422,6 +435,7 @@ class DiffusionPPOAgent:
         ).unsqueeze(0)
 
         value = self.critic(prompt_features_tensor).detach().cpu().numpy()[0][0]
+        # value = 0.0
 
         # Clean up prompt tensor
         del prompt_features_tensor
@@ -440,11 +454,22 @@ class DiffusionPPOAgent:
             gc.collect()
 
             trajectory, log_prob_tensor = self.actor.select_trajectory(prompt)
+
+            # Store and then immediately clear the trajectory's computation graph
+            log_prob_value = log_prob_tensor.item()
+            log_prob_detached = log_prob_tensor.detach()
+
+            # Clear the trajectory's gradient connection after storing what we need
+            if hasattr(trajectory, 'total_log_prob'):
+                trajectory.total_log_prob = trajectory.total_log_prob.detach().requires_grad_(True)
+
+
             trajectories.append(trajectory)
 
-            log_probs.append(log_prob_tensor.item())
-            log_prob_tensors.append(log_prob_tensor)  # Keep tensor with gradients!
+            log_probs.append(log_prob_value)
+            log_prob_tensors.append(log_prob_detached.requires_grad_(True))  # Keep tensor with gradients!
 
+            
             print(f"  Image {i+1}/{self.images_per_prompt} generated")
 
             # Save sample image if needed (before cleaning up trajectory)
@@ -471,8 +496,11 @@ class DiffusionPPOAgent:
                     if hasattr(step, 'noise_pred'):
                         step.noise_pred = None  # Clear noise predictions
             
+            # Force garbage collection
+            del trajectory, log_prob_tensor
             torch.cuda.empty_cache()
             gc.collect()
+
         
         # Calculate individual diversity rewards using your efficient function
         individual_rewards = self.reward_function.calculate_batch_rewards(trajectories)
@@ -533,6 +561,8 @@ class DiffusionPPOAgent:
         
         print("Starting PPO update...")
 
+        print(f"🔍 UNet training mode: {self.actor.unet.training}")
+
         # Copy current actor to old_actor (copy UNet weights) - Handle DataParallel
         if hasattr(self.actor.unet, 'module') and hasattr(self.old_actor.unet, 'module'):
             self.old_actor.unet.module.load_state_dict(self.actor.unet.module.state_dict())
@@ -549,16 +579,22 @@ class DiffusionPPOAgent:
         # Get trajectory data
         memo_features, memo_prompts, memo_trajectories, memo_rewards, memo_values, memo_log_probs, memo_log_prob_tensors, batches = self.replay_buffer.sample()
         
+
+        print(f"🔍 Rewards: {memo_rewards}")
+        print(f"🔍 Values: {memo_values}")
+        print(f"🔍 Raw advantages (R-V): {memo_rewards - memo_values}")
+
         # Convert log_probs to numpy array
         memo_log_probs_array = np.array([lp.item() if torch.is_tensor(lp) else lp for lp in memo_log_probs])
 
         # Compute advantages using GAE
         memo_advantages = self.compute_gae(memo_rewards, memo_values)
+        # memo_advantages = np.array([1.0, -1.0, 0.5, -0.5])
         
         # Normalize advantages
-        memo_advantages = (memo_advantages - memo_advantages.mean()) / (memo_advantages.std() + 1e-8)
-        avg_advantage = memo_advantages.mean()
-        print(f"Avg Advantage: {avg_advantage:.4f}")
+        # memo_advantages = (memo_advantages - memo_advantages.mean())
+        # avg_advantage = memo_advantages.mean()
+        # print(f"Avg Advantage: {avg_advantage:.4f}")
 
         # Compute returns
         memo_returns = memo_advantages + memo_values
@@ -579,13 +615,9 @@ class DiffusionPPOAgent:
             device=self.device
         )
         
-        # Get old policy log probabilities (frozen)
-        with torch.no_grad():
-            old_log_probs = []
-            for trajectory in memo_trajectories:
-                old_log_prob = self.old_actor.calculate_log_prob(trajectory)
-                old_log_probs.append(old_log_prob.item())
-            old_log_probs = torch.tensor(old_log_probs, dtype=self.dtype).to(device)
+        # Get old policy log probabilities
+        old_log_probs = torch.tensor([lp if isinstance(lp, float) else lp.item() 
+                              for lp in memo_log_probs], dtype=self.dtype).to(device)
         
         # Accumulate losses
         all_actor_losses = []
@@ -606,22 +638,35 @@ class DiffusionPPOAgent:
                 # Get current log probs from stored tensors (they still have gradients!)
                 current_log_probs = []
                 for idx in batch:
-                    current_log_probs.append(memo_log_prob_tensors[idx])
-                
+                    # Get the trajectory and regenerate log prob with current actor (maintains gradients)
+                    trajectory = memo_trajectories[idx]
+                    current_log_prob = self.actor.calculate_log_prob(trajectory)
+                    current_log_probs.append(current_log_prob)
+
                 current_log_probs_tensor = torch.stack(current_log_probs)
                 current_log_probs_tensor = current_log_probs_tensor.to(self.dtype)
+
+                # Check gradient requirements
+                print(f"🔍 Current log probs require grad: {[lp.requires_grad for lp in current_log_probs[:3]]}")
                 
                 # Calculate ratio
                 ratio = torch.exp(current_log_probs_tensor - old_log_probs[batch])
                 
                 # Batch advantages
+                # TODO: Log advantages
                 batch_advantages = memo_advantages_tensor[batch]
+                print("Batch advantages mean:", batch_advantages.mean().item())
                 
                 # PPO clipped objective
                 surr1 = ratio * batch_advantages
                 surr2 = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP) * batch_advantages
+
+                # TODO: Print surrogates
+                print("surr1 mean:", surr1.mean().item())
+                print("surr2 mean:", surr2.mean().item())
                 
                 # Actor loss (no entropy for diffusion models - they have inherent stochasticity)
+                # TODO: Check
                 actor_loss = -torch.min(surr1, surr2).mean()
                 
                 # Critic loss
@@ -640,7 +685,20 @@ class DiffusionPPOAgent:
                 
                 # Update actor (UNet)
                 self.actor_optimizer.zero_grad()
+
+                print(f"Actor loss requires_grad: {actor_loss.requires_grad}")
+                print(f"Actor loss value: {actor_loss.item()}")
+
                 actor_loss.backward()
+
+                total_grad_norm = 0
+                param_count = 0
+                for param in self.actor.unet.parameters():
+                    if param.grad is not None:
+                        total_grad_norm += param.grad.norm().item()
+                        param_count += 1
+                print(f"Total gradient norm: {total_grad_norm}, Params with gradients: {param_count}")
+
 
                 # Handle gradient clipping for DataParallel
                 if hasattr(self.actor.unet, 'module'):

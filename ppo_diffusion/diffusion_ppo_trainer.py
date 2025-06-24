@@ -17,7 +17,7 @@ import torchvision.transforms as transforms
 # Diffusion PPO Training Parameters (equivalent to vanilla PPO structure)
 NUM_EPISODE = 1000              # Total number of "episodes" (trajectory generations)
 BATCH_SIZE = 4                 # Mini-batch size for PPO updates
-EPISODES_PER_UPDATE = 4        # Same as TRAJECTORY_LENGTH for diffusion
+EPISODES_PER_UPDATE = 1        # Same as TRAJECTORY_LENGTH for diffusion
 USE_FP16 = False                # define precision
 
 # Device setup
@@ -123,7 +123,7 @@ def main(category: str = CATEGORY):
             print(f"Prompt: '{prompt}'")
             
             # Generate batch of images for this prompt
-            trajectories, individual_rewards, avg_reward, prompt_features = agent.generate_batch_for_prompt(prompt)
+            trajectories, individual_rewards, avg_reward, prompt_features = agent.generate_batch_for_prompt(prompt=prompt, episode=episode_i)
             
             # Track episode reward (average of batch)
             episode_reward = avg_reward

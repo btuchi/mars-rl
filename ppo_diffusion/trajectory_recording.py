@@ -31,6 +31,8 @@ class DiffusionTrajectory:
     final_image: torch.Tensor
     condition: torch.Tensor
     reward: Optional[float] = None
+    total_log_prob: Optional[torch.Tensor] = None  # Total log probability for the trajectory
+    
 
 class DiffusionSampler:
     """
@@ -183,6 +185,10 @@ class DiffusionSampler:
         # Set timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=self.device)
         timesteps = self.scheduler.timesteps
+
+        # Initialize TOTAL log probability (this is what we'll backprop through)
+        total_log_prob = torch.tensor(0.0, device=self.device, dtype=self.dtype, requires_grad=True)
+
         
         # Initialize trajectory storage
         trajectory_steps = []
@@ -219,15 +225,15 @@ class DiffusionSampler:
             log_prob = -0.5 * torch.sum(noise_pred_guided ** 2)  # Simplified Gaussian log-prob
 
 
-            with torch.no_grad():
-                # Assuming Gaussian noise distribution
-                noise_diff = noise_pred_guided - latents
-                log_prob = -0.5 * torch.sum(noise_diff ** 2) / (latents.numel())
-                log_prob = log_prob * 0.01  # Scale factor to prevent vanishing gradients
+            # with torch.no_grad():
+            # Assuming Gaussian noise distribution
+            noise_diff = noise_pred_guided - latents
+            log_prob = -0.5 * torch.sum(noise_diff ** 2) / (latents.numel())
+            step_log_prob = log_prob * 0.01  # Scale factor to prevent vanishing gradients
 
-            # Make sure to remove no_grad when storing for training
-            log_prob_with_grad = log_prob.detach().requires_grad_(True)
-            
+            total_log_prob = total_log_prob + step_log_prob
+            log_prob_with_grad = log_prob
+
             # Denoise: Compute the previous noisy sample x_t -> x_{t-1}
             scheduler_output = self.scheduler.step(noise_pred_guided, t, latents, return_dict=True)
             prev_latents = scheduler_output.prev_sample
@@ -238,7 +244,7 @@ class DiffusionSampler:
                 state=latents.clone().detach(),  
                 action=prev_latents.clone().detach(),  
                 condition=text_embeddings[1:2].clone().detach(),  
-                log_prob=log_prob_with_grad.clone(),  
+                log_prob=step_log_prob.detach(),  
                 noise_pred=noise_pred_guided.clone().detach()  
             )
 
@@ -249,7 +255,7 @@ class DiffusionSampler:
 
             # Clear intermediate variables to save memory
             del noise_pred, noise_pred_uncond, noise_pred_text, noise_pred_guided
-            del latent_model_input, scheduler_output
+            del latent_model_input, scheduler_output, step_log_prob  # Clear step log prob
         
         # Decode final latents to image
         with torch.no_grad():
@@ -261,8 +267,10 @@ class DiffusionSampler:
         trajectory = DiffusionTrajectory(
             steps=trajectory_steps,
             final_image=final_image.detach(),
-            condition=text_embeddings[1:2].clone().detach()  # Store conditional embedding
+            condition=text_embeddings[1:2].clone().detach(),  # Store conditional embedding
+            total_log_prob=total_log_prob
         )
+        
 
         # Final memory cleanup
         del text_embeddings, uncond_embeddings, latents

@@ -33,9 +33,12 @@ class TrainingLogger:
             self.logs_dir = current_path / "logs" / f"{category}_{training_timestamp}"
             self.logs_dir.mkdir(parents=True, exist_ok=True)
             
+            
             # CSV file paths
             self.episode_csv = self.logs_dir / "episode_log.csv"
             self.loss_csv = self.logs_dir / "loss_log.csv"
+            self.value_csv = self.logs_dir / "value_predictions.csv"
+            self.return_csv = self.logs_dir / "returns.csv"
             self.metadata_csv = self.logs_dir / "metadata.csv"
             
             # Initialize metadata
@@ -55,6 +58,8 @@ class TrainingLogger:
             # Episode tracking
             self.episode_data = []
             self.loss_data = []
+            self.return_data = []
+            self.value_prediction_data = []
             
             # Auto-save every N episodes
             self.save_frequency = 10
@@ -88,7 +93,33 @@ class TrainingLogger:
                 self.save_all_logs(final=True)
         
         atexit.register(exit_handler)
+
+    def log_value_prediction(self, value_prediction: float):
+        """Log value prediction data"""
+        value_entry = {
+            'value_prediction': value_prediction,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        # Add to global list (for compatibility with existing code)
+        VALUE_PREDICTION_LOG.append(value_prediction)
+        
+        # Also save to dedicated list for CSV
+        self.value_prediction_data.append(value_entry)
     
+    def log_return(self, return_value: float):
+        """Log return value data"""
+        return_entry = {
+            'return_value': return_value,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        # Add to global list (for compatibility with existing code)
+        RETURN_LOG.append(return_value)
+        
+        # Also save to dedicated list for CSV
+        self.return_data.append(return_entry)
+        
+        
     def log_episode(self, episode: int, prompt: str, individual_rewards: list, 
                    avg_reward: float, best_reward: float):
         
@@ -134,7 +165,26 @@ class TrainingLogger:
         
         # Save loss log (smaller, save more frequently)
         self.save_loss_log()
-        
+    
+    def save_value_predictions(self):
+        """Save value predictions to CSV"""
+        try:
+            df = pd.DataFrame(self.value_prediction_data)
+            df.to_csv(self.value_csv, index=False)
+            print(f"💾 Value predictions saved: {len(self.value_prediction_data)} entries")
+        except Exception as e:
+            print(f"⚠️ Error saving value predictions: {e}")
+    
+    def save_returns(self):
+        """Save returns to CSV"""
+        try:                
+            df = pd.DataFrame(self.return_data)
+            df.to_csv(self.return_csv, index=False)
+            print(f"💾 Returns saved: {len(self.return_data)} entries")
+        except Exception as e:
+            print(f"⚠️ Error saving returns: {e}")
+
+    
     def save_episode_log(self):
         """Save episode data to CSV"""
         try:
@@ -176,6 +226,8 @@ class TrainingLogger:
         self.save_episode_log()
         self.save_loss_log()
         self.save_metadata()
+        self.save_value_predictions()
+        self.save_returns()
         
         if final:
             print(f"📊 Final logs saved to: {self.logs_dir}")
@@ -226,6 +278,17 @@ def initialize_logger(training_timestamp: str, category: str = "mars_craters"):
     _logger = TrainingLogger(training_timestamp, category)
     return _logger
 
+# Add these wrapper functions at the module level:
+def log_value_prediction(value_prediction: float):
+    """Log value prediction (convenient wrapper)"""
+    if _logger:
+        _logger.log_value_prediction(value_prediction)
+
+def log_return(return_value: float):
+    """Log return value (convenient wrapper)"""
+    if _logger:
+        _logger.log_return(return_value)
+
 def log_episode(episode: int, prompt: str, individual_rewards: list, 
                avg_reward: float, best_reward: float):
     """Log episode data (convenient wrapper)"""
@@ -268,6 +331,18 @@ def load_training_data(training_timestamp: str, category: str = "crater"):
             data['metadata'] = pd.read_csv(metadata_csv).iloc[0].to_dict()
             print(f"📊 Loaded metadata")
         
+        # Load value predictions
+        value_csv = logs_dir / "value_predictions.csv"
+        if value_csv.exists():
+            data['value_predictions'] = pd.read_csv(value_csv)
+            print(f"📊 Loaded {len(data['value_predictions'])} value predictions")
+        
+        # Load returns
+        returns_csv = logs_dir / "returns.csv"
+        if returns_csv.exists():
+            data['returns'] = pd.read_csv(returns_csv)
+            print(f"📊 Loaded {len(data['returns'])} returns")
+        
         return data
         
     except Exception as e:
@@ -283,6 +358,8 @@ def plot_from_csv(training_timestamp: str, category: str = "crater"):
     
     episodes_df = data.get('episodes')
     losses_df = data.get('losses')
+    value_predictions_df = data.get('value_predictions')
+    returns_df = data.get('returns')
     
     if episodes_df is None:
         print("❌ No episode data to plot")
@@ -321,14 +398,36 @@ def plot_from_csv(training_timestamp: str, category: str = "crater"):
     axes[1, 0].set_ylabel('Frequency')
     axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
-    
-    # Best reward progress
-    axes[1, 1].plot(episodes_df['episode'], episodes_df['best_reward'], label='Best Reward', color='green')
-    axes[1, 1].set_title('Best Reward Progress')
-    axes[1, 1].set_xlabel('Episode')
-    axes[1, 1].set_ylabel('Best Reward')
-    axes[1, 1].legend()
-    axes[1, 1].grid(True, alpha=0.3)
+        
+    # Ensure we have the same number of predictions and returns
+    min_len = min(len(value_predictions_df), len(returns_df))
+    if min_len > 0:
+        pred_values = value_predictions_df['value_prediction'].iloc[:min_len]
+        return_values = returns_df['return_value'].iloc[:min_len]
+        
+        # Create scatter plot
+        axes[1, 1].scatter(pred_values, return_values, alpha=0.6, s=10)
+        
+        # Add perfect prediction line
+        all_values = list(pred_values) + list(return_values)
+        min_val, max_val = min(all_values), max(all_values)
+        axes[1, 1].plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+        
+        # Calculate and display correlation
+        correlation = pred_values.corr(return_values)
+        axes[1, 1].text(0.02, 0.98, f"Correlation: {correlation:.3f}", 
+                        transform=axes[1, 1].transAxes, fontsize=9,
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        axes[1, 1].set_title('Value Predictions vs Returns')
+        axes[1, 1].set_xlabel('Predicted V(prompt)')
+        axes[1, 1].set_ylabel('Actual Return')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+            
+        print(f"📊 Plotted {min_len} value prediction vs return pairs")
+    else:
+        raise ValueError("No matching data found")
     
     plt.tight_layout()
     
