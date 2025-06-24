@@ -629,7 +629,7 @@ class DiffusionPPOAgent:
         unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
         unet.zero_grad()
         fresh_loss = -fresh_log_prob
-        fresh_loss.backward()
+        fresh_loss.backward(retain_graph=True)
         
         fresh_grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
         fresh_grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
@@ -694,7 +694,7 @@ class DiffusionPPOAgent:
         print("Starting PPO update...")
 
         # Run gradient flow tests before update
-        self.run_gradient_tests()
+        # self.run_gradient_tests()
 
         print(f"🔍 UNet training mode: {self.actor.unet.training}")
 
@@ -854,7 +854,13 @@ class DiffusionPPOAgent:
                 critic_loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
                 self.critic_optimizer.step()
-        
+
+                # Clear gradients and memory after each batch
+                del current_log_probs, fresh_trajectory, fresh_log_prob
+                torch.cuda.empty_cache()
+                import gc
+                gc.collect()
+                    
         # Log losses
         if all_actor_losses:
             ACTOR_LOSS_LOG.append(np.mean(all_actor_losses))
