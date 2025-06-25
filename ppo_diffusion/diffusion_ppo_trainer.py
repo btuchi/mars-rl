@@ -234,12 +234,7 @@ def main(category: str = CATEGORY):
         # This will ALWAYS run, even if training is interrupted
         print(f"\n💾 Finalizing logs...")
         log_utils.finalize_logging()
-    
-        # Create plots from saved CSV data
-        try:
-            log_utils.plot_from_csv(timestamp, category)
-        except Exception as e:
-            print(f"⚠️ Could not create plots: {e}")
+        log_utils.plot_from_csv(timestamp, category)
     
 
 def plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, final_episode=None, category=CATEGORY):

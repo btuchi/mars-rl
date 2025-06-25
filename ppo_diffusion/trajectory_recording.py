@@ -177,11 +177,24 @@ class DiffusionSampler:
             # Perform classifier-free guidance
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred_guided = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-            
-            # Calculate log probability - SIMPLE approach
-            noise_diff = noise_pred_guided - latents
-            log_prob = -0.5 * torch.sum(noise_diff ** 2) / (latents.numel())
-            step_log_prob = log_prob * 0.01
+
+            # Clamp extreme values
+            # noise_pred_clamped = torch.clamp(noise_pred_guided, -10.0, 10.0)
+            noise_pred_clamped = noise_pred_guided
+
+            # print(f"Step {i}:")
+            # print(f"  noise_pred_guided min/max: {noise_pred_guided.min():.4f}/{noise_pred_guided.max():.4f}")
+            # print(f"  noise_pred_clamped min/max: {noise_pred_clamped.min():.4f}/{noise_pred_clamped.max():.4f}")
+            # print(f"  Contains NaN: {torch.isnan(noise_pred_clamped).any()}")
+
+            # Simple but stable log probability
+            mse = torch.mean((noise_pred_clamped) ** 2)
+            step_log_prob = -mse * 0.01  # Small scale factor
+
+            # Check for NaN and replace with safe value
+            if torch.isnan(step_log_prob) or torch.isinf(step_log_prob):
+                step_log_prob = torch.tensor(-0.01, device=noise_pred_guided.device, requires_grad=True)
+                print("⚠️ NaN detected in step_log_prob, using safe fallback")
             
             # ONLY device fix we actually need:
             if step_log_prob.device != total_log_prob.device:

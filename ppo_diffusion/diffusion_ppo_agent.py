@@ -12,7 +12,9 @@ from typing import List, Optional, Tuple
 from trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
 from diversity_reward import calculate_individual_diversity_rewards
 from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, VALUE_PREDICTION_LOG, RETURN_LOG, CATEGORY
+from diffusion_log_utils import log_value_prediction, log_return
 
+import gc
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Computing device: {device}")
 
@@ -265,11 +267,9 @@ class DiffusionPPOAgent:
         
         # PPO hyperparameters (same as vanilla PPO)
         
-        # TODO: Try changing learning rates
-        # self.LR_ACTOR = 3e-5       # Lower for diffusion models
-        # self.LR_CRITIC = 3e-4     # Lower for diffusion models
-        self.LR_ACTOR = 0.001       # Lower for diffusion models
-        self.LR_CRITIC = 0.001     # Lower for diffusion models
+        self.LR_ACTOR = 3e-5       # Lower for diffusion models
+        self.LR_CRITIC = 3e-4     # Lower for diffusion models
+
         
         self.GAMMA = 0.9           # Usually 1.0 for diffusion (reward only at end)
         self.LAMBDA = 0.95         # Same GAE parameter
@@ -528,7 +528,7 @@ class DiffusionPPOAgent:
         
         return trajectories, individual_rewards, avg_reward, prompt_features
     
-    
+
     def compute_gae(self, rewards, values):
         """
         GAE computation for diffusion models
@@ -680,14 +680,14 @@ class DiffusionPPOAgent:
         
         print("="*60)
 
-    def monitor_gpu_memory(self, location=""):
-        """Monitor GPU memory usage with location context"""
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                allocated = torch.cuda.memory_allocated(i) / 1024**3
-                reserved = torch.cuda.memory_reserved(i) / 1024**3  
-                max_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
-                print(f"🔍 {location} - GPU {i}: {allocated:.1f}GB/{max_memory:.1f}GB allocated, {reserved:.1f}GB reserved")
+    # def monitor_gpu_memory(self, location=""):
+    #     """Monitor GPU memory usage with location context"""
+    #     if torch.cuda.is_available():
+    #         for i in range(torch.cuda.device_count()):
+    #             allocated = torch.cuda.memory_allocated(i) / 1024**3
+    #             reserved = torch.cuda.memory_reserved(i) / 1024**3  
+    #             max_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
+    #             print(f"🔍 {location} - GPU {i}: {allocated:.1f}GB/{max_memory:.1f}GB allocated, {reserved:.1f}GB reserved")
 
     def update(self):
         """
@@ -701,17 +701,14 @@ class DiffusionPPOAgent:
         
         print("Starting PPO update...")
 
-        self.monitor_gpu_memory("Before update")
+        # self.monitor_gpu_memory("Before update")
 
         # Aggressive cache clearing
         torch.cuda.empty_cache()
-        import gc
         gc.collect()
 
         # Run gradient flow tests before update
         # self.run_gradient_tests()
-
-        # print(f"🔍 UNet training mode: {self.actor.unet.training}")
 
         # Copy current actor to old_actor (copy UNet weights) - Handle DataParallel
         if hasattr(self.actor.unet, 'module') and hasattr(self.old_actor.unet, 'module'):
@@ -723,13 +720,9 @@ class DiffusionPPOAgent:
             # Neither has DataParallel
             self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
         
-        # Copy current actor to old_actor (copy UNet weights)
-        # self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
-        
         # Get trajectory data
         memo_features, memo_prompts, memo_trajectories, memo_rewards, memo_values, memo_log_probs, memo_log_prob_tensors, batches = self.replay_buffer.sample()
         
-
         print(f"🔍 Rewards: {memo_rewards}")
         print(f"🔍 Values: {memo_values}")
         print(f"🔍 Raw advantages (R-V): {memo_rewards - memo_values}")
@@ -747,6 +740,13 @@ class DiffusionPPOAgent:
 
         # Compute returns
         memo_returns = memo_advantages + memo_values
+
+        print("📊 Logging value predictions and returns to CSV...")
+        for value in memo_values.flatten():
+            log_value_prediction(float(value))
+        
+        for return_val in memo_returns.flatten():
+            log_return(float(return_val))
         
         # Convert to tensors
         memo_features_tensor = torch.from_numpy(np.array(memo_features)).to(
@@ -772,93 +772,6 @@ class DiffusionPPOAgent:
         all_actor_losses = []
         all_critic_losses = []
 
-        chunk_size = 1  # Process one trajectory at a time for H100s
-
-        # for epoch_i in range(self.EPOCH):
-        #     # Process trajectories in chunks
-        #     for start_idx in range(0, len(memo_trajectories), chunk_size):
-        #         end_idx = min(start_idx + chunk_size, len(memo_trajectories))
-        #         chunk_indices = list(range(start_idx, end_idx))
-                
-        #         # Clear cache before each chunk
-        #         torch.cuda.empty_cache()
-                
-        #         try:
-        #             # Process this chunk
-        #             chunk_actor_losses = []
-        #             chunk_critic_losses = []
-                    
-        #             for idx in chunk_indices:
-        #                 # Get data for this trajectory
-        #                 prompt = memo_prompts[idx]
-        #                 advantage = memo_advantages[idx]
-        #                 return_val = memo_returns[idx]
-        #                 old_log_prob = memo_log_probs[idx]
-        #                 features = memo_features[idx]
-                        
-        #                 # Convert to tensors
-        #                 advantage_tensor = torch.tensor(advantage, dtype=self.dtype, device=self.device)
-        #                 return_tensor = torch.tensor(return_val, dtype=self.dtype, device=self.device)
-        #                 old_log_prob_tensor = torch.tensor(old_log_prob, dtype=self.dtype, device=self.device)
-        #                 features_tensor = torch.from_numpy(features).to(device=self.device, dtype=self.dtype).unsqueeze(0)
-                        
-        #                 # Generate fresh trajectory with current policy
-        #                 # This is where the OOM was happening - now we do it one at a time
-        #                 fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
-                        
-        #                 # Calculate ratio
-        #                 ratio = torch.exp(fresh_log_prob - old_log_prob_tensor)
-                        
-        #                 # PPO clipped objective
-        #                 surr1 = ratio * advantage_tensor
-        #                 surr2 = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP) * advantage_tensor
-        #                 actor_loss = -torch.min(surr1, surr2)
-                        
-        #                 # Critic loss
-        #                 value_pred = self.critic(features_tensor).squeeze()
-        #                 critic_loss = nn.MSELoss()(value_pred, return_tensor)
-                        
-        #                 # Update actor
-        #                 self.actor_optimizer.zero_grad()
-        #                 actor_loss.backward()
-                        
-        #                 # Gradient clipping for DataParallel
-        #                 if hasattr(self.actor.unet, 'module'):
-        #                     torch.nn.utils.clip_grad_norm_(self.actor.unet.module.parameters(), max_norm=0.5)
-        #                 else:
-        #                     torch.nn.utils.clip_grad_norm_(self.actor.unet.parameters(), max_norm=0.5)
-                        
-        #                 self.actor_optimizer.step()
-                        
-        #                 # Update critic
-        #                 self.critic_optimizer.zero_grad()
-        #                 critic_loss.backward()
-        #                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
-        #                 self.critic_optimizer.step()
-                        
-        #                 # Store losses
-        #                 chunk_actor_losses.append(actor_loss.item())
-        #                 chunk_critic_losses.append(critic_loss.item())
-                        
-        #                 # Immediate cleanup
-        #                 del fresh_trajectory, fresh_log_prob, ratio, surr1, surr2
-        #                 del actor_loss, critic_loss, value_pred
-        #                 del advantage_tensor, return_tensor, old_log_prob_tensor, features_tensor
-                    
-        #             # Add chunk losses to total
-        #             all_actor_losses.extend(chunk_actor_losses)
-        #             all_critic_losses.extend(chunk_critic_losses)
-                    
-        #         except torch.cuda.OutOfMemoryError as e:
-        #             print(f"⚠️ OOM in chunk {start_idx}-{end_idx}, clearing cache and continuing...")
-        #             torch.cuda.empty_cache()
-        #             import gc
-        #             gc.collect()
-        #             continue
-                
-        #         # Force cleanup after each chunk
-        #         torch.cuda.empty_cache()
-        
         # Train for multiple epochs
         for epoch_i in range(self.EPOCH):
             for batch in batches:
@@ -867,9 +780,6 @@ class DiffusionPPOAgent:
                 
                 # Current policy log probabilities
                 current_log_probs = []
-
-                # NO REGENERATION! Use stored tensors with gradients
-                # print(f"  Using stored gradients for {len(batch)} trajectories...")
                 
                 # Get current log probs
                 current_log_probs = []
@@ -884,15 +794,23 @@ class DiffusionPPOAgent:
 
                 current_log_probs_tensor = torch.stack(current_log_probs)
 
+                # if torch.isnan(current_log_probs_tensor).any():
+                #     print("🚨 NaN detected in old log probs! Skipping this batch.")
+                #     continue
+
                 old_log_probs_batch = torch.tensor([memo_log_probs[idx] for idx in batch], 
                                           dtype=self.dtype, device=self.device)
-                # current_log_probs_tensor = current_log_probs_tensor.to(self.dtype)
 
-                # Check gradient requirements
-                # print(f"🔍 Current log probs require grad: {[lp.requires_grad for lp in current_log_probs[:3]]}")
+                # if torch.isnan(old_log_probs_batch).any():
+                #     print("🚨 NaN detected in old log probs! Skipping this batch.")
+                #     continue
+    
                 
                 # Calculate ratio
                 ratio = torch.exp(current_log_probs_tensor - old_log_probs_batch)
+                # log_ratio = current_log_probs_tensor - old_log_probs_batch
+                # log_ratio = torch.clamp(log_ratio, -10.0, 10.0)  # Prevent extreme ratios
+                # ratio = torch.exp(log_ratio)
                 
                 # Batch advantages
                 batch_advantages = memo_advantages_tensor[batch]
@@ -957,7 +875,6 @@ class DiffusionPPOAgent:
                 # Clear gradients and memory after each batch
                 del current_log_probs, fresh_trajectory, fresh_log_prob
                 torch.cuda.empty_cache()
-                import gc
                 gc.collect()
                     
         # Log losses
@@ -976,6 +893,18 @@ class DiffusionPPOAgent:
         
         # Clear buffer
         self.replay_buffer.clear_memo()
+
+        # Weight monitoring
+        unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
+        max_weight = max(p.abs().max().item() for p in unet.parameters())
+        weight_norm = sum(p.norm().item() for p in unet.parameters())
+        
+        print(f"🔍 Max UNet weight: {max_weight:.6f}")
+        print(f"🔍 Total weight norm: {weight_norm:.6f}")
+        
+        # Emergency reset if weights explode
+        if max_weight > 100.0 or torch.isnan(torch.tensor(max_weight)):
+            print("🚨 UNet weights exploded! Consider resetting or lower LR")
     
     def save_policy(self):
         """Save the trained policy (UNet weights)"""
