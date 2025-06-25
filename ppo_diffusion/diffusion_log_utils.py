@@ -92,7 +92,13 @@ class TrainingLogger:
                 self.metadata['interruption_reason'] = "Unexpected exit"
                 self.save_all_logs(final=True)
         
+        def graceful_exit(signum, frame):
+            print("🛑 Job being killed - saving logs...")
+            self.save_all_logs(final=True)
+            sys.exit(0)
+        
         atexit.register(exit_handler)
+        signal.signal(signal.SIGTERM, graceful_exit)
 
     def log_value_prediction(self, value_prediction: float):
         """Log value prediction data"""
@@ -169,18 +175,20 @@ class TrainingLogger:
     def save_value_predictions(self):
         """Save value predictions to CSV"""
         try:
-            df = pd.DataFrame(self.value_prediction_data)
-            df.to_csv(self.value_csv, index=False)
-            print(f"💾 Value predictions saved: {len(self.value_prediction_data)} entries")
+            if self.value_prediction_data:
+                df = pd.DataFrame(self.value_prediction_data)
+                df.to_csv(self.value_csv, index=False)
+                print(f"💾 Value predictions saved: {len(self.value_prediction_data)} entries")
         except Exception as e:
             print(f"⚠️ Error saving value predictions: {e}")
     
     def save_returns(self):
         """Save returns to CSV"""
         try:                
-            df = pd.DataFrame(self.return_data)
-            df.to_csv(self.return_csv, index=False)
-            print(f"💾 Returns saved: {len(self.return_data)} entries")
+            if self.return_data:
+                df = pd.DataFrame(self.return_data)
+                df.to_csv(self.return_csv, index=False)
+                print(f"💾 Returns saved: {len(self.return_data)} entries")
         except Exception as e:
             print(f"⚠️ Error saving returns: {e}")
 
@@ -400,7 +408,7 @@ def plot_from_csv(training_timestamp: str, category: str = "crater"):
     axes[1, 0].grid(True, alpha=0.3)
         
     # Ensure we have the same number of predictions and returns
-    min_len = min(len(value_predictions_df), len(returns_df))
+    min_len = min(len(value_predictions_df), len(returns_df)) if value_predictions_df and returns_df else 0
     if min_len > 0:
         pred_values = value_predictions_df['value_prediction'].iloc[:min_len]
         return_values = returns_df['return_value'].iloc[:min_len]

@@ -6,7 +6,7 @@ sys.path.append(str(project_root))
 from ppo_diffusion.diffusion_log_utils import plot_from_csv
 
 # Define the training timestamp and category
-training_timestamp = "20250620211027"  # Replace with the actual timestamp from your logs
+training_timestamp = "20250624222513"  # Replace with the actual timestamp from your logs
 category = "crater"  # Replace with the category used during training
 
 # Call the function to plot the data

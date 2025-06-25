@@ -12,8 +12,7 @@ from typing import List, Optional, Tuple
 from trajectory_recording import DiffusionSampler, DiffusionTrajectory, extract_features_from_trajectory
 from diversity_reward import calculate_individual_diversity_rewards
 from diffusion_log_utils import ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, VALUE_PREDICTION_LOG, RETURN_LOG, CATEGORY
-from diffusion_log_utils import log_value_prediction, log_return
-
+import diffusion_log_utils as log_utils
 import gc
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Computing device: {device}")
@@ -700,6 +699,7 @@ class DiffusionPPOAgent:
             return
         
         print("Starting PPO update...")
+        # logger = log_utils.initialize_logger(self.training_start, CATEGORY)
 
         # self.monitor_gpu_memory("Before update")
 
@@ -743,10 +743,12 @@ class DiffusionPPOAgent:
 
         print("📊 Logging value predictions and returns to CSV...")
         for value in memo_values.flatten():
-            log_value_prediction(float(value))
+            log_utils.log_value_prediction(float(value))
+        log_utils.save_value_predictions()
         
         for return_val in memo_returns.flatten():
-            log_return(float(return_val))
+            log_utils.log_return(float(return_val))
+        log_utils.save_returns()
         
         # Convert to tensors
         memo_features_tensor = torch.from_numpy(np.array(memo_features)).to(
@@ -805,12 +807,25 @@ class DiffusionPPOAgent:
                 #     print("🚨 NaN detected in old log probs! Skipping this batch.")
                 #     continue
     
-                
                 # Calculate ratio
                 ratio = torch.exp(current_log_probs_tensor - old_log_probs_batch)
-                # log_ratio = current_log_probs_tensor - old_log_probs_batch
-                # log_ratio = torch.clamp(log_ratio, -10.0, 10.0)  # Prevent extreme ratios
-                # ratio = torch.exp(log_ratio)
+
+                # Analyze the ratio distribution
+                ratio_mean = ratio.mean().item()
+                ratio_max = ratio.max().item()
+                ratio_min = ratio.min().item()
+                
+                print(f"🔍 Ratio stats: mean={ratio_mean:.3f}, min={ratio_min:.3f}, max={ratio_max:.3f}")
+                
+                # Check if we're hitting PPO clipping frequently
+                clipped_ratios = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP)
+                clipping_rate = (ratio != clipped_ratios).float().mean().item()
+                
+                print(f"🔍 PPO clipping rate: {clipping_rate:.2%}")
+                
+                if clipping_rate > 0.5:
+                    print("⚠️ High clipping rate - policy changing too fast!")
+
                 
                 # Batch advantages
                 batch_advantages = memo_advantages_tensor[batch]

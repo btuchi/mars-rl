@@ -223,6 +223,8 @@ def main(category: str = CATEGORY):
         plot_diffusion_training(REWARD_BUFFER, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, NUM_EPISODE-1, category=category)
 
     except KeyboardInterrupt:
+        log_utils.log_interrupt(timestamp, category)
+
         print(f"\n⚠️ Training interrupted by user (Ctrl+C)")
         
     except Exception as e:
