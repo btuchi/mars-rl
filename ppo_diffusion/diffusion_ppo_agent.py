@@ -32,7 +32,6 @@ class DiffusionPolicyNetwork(nn.Module):
         self.sampler = sampler
         self.unet = sampler.unet  # This is our "policy network"
         self.num_inference_steps = num_inference_steps
-        # Initialize CSV logger
         
     def forward(self, prompt: str) -> DiffusionTrajectory:
         """
@@ -48,7 +47,6 @@ class DiffusionPolicyNetwork(nn.Module):
             num_inference_steps=self.num_inference_steps
         )
     
-    # TODO: Track log probabilities of each step
     def calculate_log_prob(self, trajectory: DiffusionTrajectory) -> torch.Tensor:
         """
         Calculate log probability of trajectory (equivalent to action log prob)
@@ -67,7 +65,7 @@ class DiffusionPolicyNetwork(nn.Module):
             # Each step has its own log probability
             for step in trajectory.steps:
                 # Ensure log_prob is a tensor with gradients
-                print("log probability:", step.log_prob)
+                # print("log probability:", step.log_prob)
                 if isinstance(step.log_prob, torch.Tensor):
                     log_probs.append(step.log_prob)
                 else:
@@ -290,8 +288,8 @@ class DiffusionRewardFunction:
                 print(f"  🚨 Image {i}: NOISE DETECTED (CLIP={content_score:.3f}) -> Penalty")
             else:
                 # Weighted combination of content quality and diversity
-                content_weight = 0.65  # Prioritize content quality
-                diversity_weight = 0.35
+                content_weight = 0.8  # Prioritize content quality
+                diversity_weight = 0.2
                 
                 final_reward = (content_weight * content_score + 
                               diversity_weight * self.normalize_reward(diversity_reward))
@@ -343,9 +341,8 @@ class DiffusionPPOAgent:
         # PPO hyperparameters (same as vanilla PPO)
         
         self.LR_ACTOR = 3e-5       # Lower for diffusion models
-        self.LR_CRITIC = 3e-4     # Lower for diffusion models
+        self.LR_CRITIC = 1e-3     # Lower for diffusion models
 
-        
         self.GAMMA = 0.9           # Usually 1.0 for diffusion (reward only at end)
         self.LAMBDA = 0.95         # Same GAE parameter
         
