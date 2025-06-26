@@ -32,7 +32,8 @@ class DiffusionPolicyNetwork(nn.Module):
         self.sampler = sampler
         self.unet = sampler.unet  # This is our "policy network"
         self.num_inference_steps = num_inference_steps
-    
+        # Initialize CSV logger
+        
     def forward(self, prompt: str) -> DiffusionTrajectory:
         """
         Generate trajectory for given prompt (equivalent to actor forward pass)
@@ -139,6 +140,7 @@ class DiffusionReplayMemory:
         self.log_probs = []          # Log probabilities of trajectories
         self.log_prob_tensors = []  # Store actual tensors with gradients
         self.BATCH_SIZE = batch_size
+        
     
     def add_memo(self, prompt_features, prompt, trajectory, reward, value, log_prob, log_prob_tensor):
         """Add a trajectory experience (equivalent to add_memo in vanilla PPO)"""
@@ -196,11 +198,28 @@ class DiffusionRewardFunction:
         self.ref_features = ref_features
         self.buffer_size = buffer_size
         self.reward_history = []
+
+        # Load CLIP for content quality checking
+        self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", device="cuda")
+        self.clip_model.eval()
+
     
-    def calculate_batch_rewards(self, trajectories: List[DiffusionTrajectory]) -> np.ndarray:
+    def calculate_clip_similarity(self, image_features, text_features):
+        """Calculate how well the image matches the text prompt"""
+        with torch.no_grad():
+            # Normalize and compute similarity
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            
+            similarity = torch.cosine_similarity(image_features, text_features).item()
+            return similarity
+
+    
+    def calculate_batch_rewards(self, trajectories: List[DiffusionTrajectory], prompt: str) -> np.ndarray:
         """
         Calculate individual diversity rewards for a batch of trajectories
         Uses your efficient calculate_individual_diversity_rewards function
+        a hybrid reward: quality + diversity
         Args:
             trajectories: List of diffusion trajectories
         Returns:
@@ -208,11 +227,24 @@ class DiffusionRewardFunction:
         """
         # Extract features from all trajectories
         batch_features = []
+        content_scores = []
+
+        # Encode the prompt once and reuse
+        with torch.no_grad():
+            text_features = self.clip_model.encode_text(clip.tokenize([prompt]).cuda())
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+
         for trajectory in trajectories:
-            features = extract_features_from_trajectory(trajectory, None)
-            features = features.reshape(1, -1)  # Ensure 2D
-            batch_features.append(features)
-        
+            # Extract features using the same CLIP model (no duplication)
+            features = extract_features_from_trajectory(trajectory, self.clip_model, self.clip_preprocess)
+            batch_features.append(features.reshape(1, -1))
+            
+            # Convert features back to tensor for similarity calculation
+            image_features = torch.from_numpy(features).cuda().unsqueeze(0)
+            
+            clip_score = self.calculate_clip_similarity(image_features, text_features)
+            content_scores.append(clip_score)
+
         # batch_features = [traj_feat1, traj_feat2, traj_feat3, traj_feat4, ... traj_featM]
         # traj_feat_i = [f1, f2, f3, .., fn] -> one final image
         # Stack into single np array (batch_size x feature_dim)
@@ -220,18 +252,38 @@ class DiffusionRewardFunction:
 
         # Calculate Individual Rewards
         individual_rewards = calculate_individual_diversity_rewards(
-            batch_features_array, 
+            batch_features_array,
             self.ref_features,
             gamma=None  # Auto-set gamma
         )
 
+        # Combine content quality + diversity
+        hybrid_rewards = []
+
+        for i, (content_score, diversity_reward) in enumerate(zip(content_scores, individual_rewards)):
+            # QUALITY GATE: Penalize noise heavily
+            if content_score < 0.15:  # Threshold for "this is basically noise"
+                final_reward = -2.0  # Heavy penalty
+                print(f"  🚨 Image {i}: NOISE DETECTED (CLIP={content_score:.3f}) -> Penalty")
+            else:
+                # Weighted combination of content quality and diversity
+                content_weight = 0.6  # Prioritize content quality
+                diversity_weight = 0.4
+                
+                final_reward = (content_weight * content_score + 
+                              diversity_weight * self.normalize_reward(diversity_reward))
+                
+                print(f"  ✅ Image {i}: clip_score={content_score:.3f}, diversity_score={diversity_reward:.3f} -> final_score={final_reward:.3f}")
+            
+            hybrid_rewards.append(final_reward)
+
         # Normalize individual rewards
-        normalized_rewards = []
-        for reward in individual_rewards:
-            normalized_reward = self.normalize_reward(reward)
-            normalized_rewards.append(normalized_reward)
+        # normalized_rewards = []
+        # for reward in individual_rewards:
+        #     normalized_reward = self.normalize_reward(reward)
+        #     normalized_rewards.append(normalized_reward)
         
-        return np.array(normalized_rewards)
+        return np.array(hybrid_rewards)
     
     def normalize_reward(self, reward: float) -> float:
         """Normalize reward based on running statistics"""
@@ -261,6 +313,7 @@ class DiffusionPPOAgent:
         self.dtype = sampler.dtype if hasattr(sampler, 'dtype') else torch.float32
         self.device = device
         self.training_start = training_start
+        self.logger = log_utils.initialize_logger(training_start, CATEGORY)
 
         print(f"PPO Agent using dtype: {self.dtype}")  # Debug print
         
@@ -310,8 +363,6 @@ class DiffusionPPOAgent:
         self.save_samples = save_samples
         if self.save_samples:
             self.setup_sample_saving()
-        
-        
     
     def setup_sample_saving(self):
         """Set up directories and tracking for sample image saving"""
@@ -502,7 +553,7 @@ class DiffusionPPOAgent:
 
         
         # Calculate individual diversity rewards using your efficient function
-        individual_rewards = self.reward_function.calculate_batch_rewards(trajectories)
+        individual_rewards = self.reward_function.calculate_batch_rewards(trajectories, prompt)
         avg_reward = np.mean(individual_rewards)
         
         print(f"  Individual rewards: {individual_rewards}")
@@ -553,131 +604,131 @@ class DiffusionPPOAgent:
     #### Gradient Flow Tests####
     #########################
     # Test 1: Direct UNet Gradient Test
-    def test_direct_unet_gradients(self):
-        """Test if UNet can compute gradients at all"""
-        print("🧪 TEST 1: Direct UNet Gradient Test")
+    # def test_direct_unet_gradients(self):
+    #     """Test if UNet can compute gradients at all"""
+    #     print("🧪 TEST 1: Direct UNet Gradient Test")
         
-        unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
-        unet.train()
+    #     unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
+    #     unet.train()
         
-        # Create simple inputs
-        latent = torch.randn(1, 4, 64, 64, device=self.device, requires_grad=True)
-        timestep = torch.tensor([500], device=self.device)
-        text_emb = torch.randn(1, 77, 768, device=self.device)
+    #     # Create simple inputs
+    #     latent = torch.randn(1, 4, 64, 64, device=self.device, requires_grad=True)
+    #     timestep = torch.tensor([500], device=self.device)
+    #     text_emb = torch.randn(1, 77, 768, device=self.device)
         
-        # Forward pass
-        output = unet(latent, timestep, text_emb)[0]
-        loss = output.mean()
+    #     # Forward pass
+    #     output = unet(latent, timestep, text_emb)[0]
+    #     loss = output.mean()
         
-        # Clear and compute gradients
-        unet.zero_grad()
-        loss.backward()
+    #     # Clear and compute gradients
+    #     unet.zero_grad()
+    #     loss.backward()
         
-        # Check results
-        grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
-        grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
+    #     # Check results
+    #     grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
+    #     grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
         
-        print(f"   Direct UNet test - Params with grads: {grad_count}")
-        print(f"   Direct UNet test - Grad norm: {grad_norm:.6f}")
+    #     print(f"   Direct UNet test - Params with grads: {grad_count}")
+    #     print(f"   Direct UNet test - Grad norm: {grad_norm:.6f}")
         
-        unet.zero_grad()
-        return grad_count > 0
+    #     unet.zero_grad()
+    #     return grad_count > 0
 
-    # Test 2: Policy Network Gradient Test  
-    def test_policy_network_gradients(self):
-        """Test if DiffusionPolicyNetwork maintains gradients"""
-        print("🧪 TEST 2: Policy Network Gradient Test")
+    # # Test 2: Policy Network Gradient Test  
+    # def test_policy_network_gradients(self):
+    #     """Test if DiffusionPolicyNetwork maintains gradients"""
+    #     print("🧪 TEST 2: Policy Network Gradient Test")
         
-        # Generate a trajectory
-        prompt = "test crater"
-        trajectory, log_prob = self.actor.select_trajectory(prompt)
+    #     # Generate a trajectory
+    #     prompt = "test crater"
+    #     trajectory, log_prob = self.actor.select_trajectory(prompt)
         
-        print(f"   Log prob value: {log_prob.item():.8f}")
-        print(f"   Log prob requires_grad: {log_prob.requires_grad}")
-        print(f"   Log prob grad_fn: {log_prob.grad_fn}")
+    #     print(f"   Log prob value: {log_prob.item():.8f}")
+    #     print(f"   Log prob requires_grad: {log_prob.requires_grad}")
+    #     print(f"   Log prob grad_fn: {log_prob.grad_fn}")
         
-        # Test backward through log_prob
-        unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
-        unet.zero_grad()
+    #     # Test backward through log_prob
+    #     unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
+    #     unet.zero_grad()
         
-        loss = -log_prob
-        loss.backward()
+    #     loss = -log_prob
+    #     loss.backward()
         
-        # Check results
-        grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
-        grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
+    #     # Check results
+    #     grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
+    #     grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
         
-        print(f"   Policy network test - Params with grads: {grad_count}")
-        print(f"   Policy network test - Grad norm: {grad_norm:.6f}")
+    #     print(f"   Policy network test - Params with grads: {grad_count}")
+    #     print(f"   Policy network test - Grad norm: {grad_norm:.6f}")
         
-        unet.zero_grad()
-        return grad_count > 0
+    #     unet.zero_grad()
+    #     return grad_count > 0
 
-    # Test 3: Stored vs Fresh Trajectory Test
-    def test_stored_vs_fresh_trajectories(self):
-        """Test difference between stored and fresh log probabilities"""
-        print("🧪 TEST 3: Stored vs Fresh Trajectory Test")
+    # # Test 3: Stored vs Fresh Trajectory Test
+    # def test_stored_vs_fresh_trajectories(self):
+    #     """Test difference between stored and fresh log probabilities"""
+    #     print("🧪 TEST 3: Stored vs Fresh Trajectory Test")
         
-        prompt = "test crater"
+    #     prompt = "test crater"
         
-        # Generate fresh trajectory
-        fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
-        print(f"   Fresh log prob: {fresh_log_prob.item():.8f}, requires_grad: {fresh_log_prob.requires_grad}")
+    #     # Generate fresh trajectory
+    #     fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
+    #     print(f"   Fresh log prob: {fresh_log_prob.item():.8f}, requires_grad: {fresh_log_prob.requires_grad}")
         
-        # Test fresh backward
-        unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
-        unet.zero_grad()
-        fresh_loss = -fresh_log_prob
-        fresh_loss.backward(retain_graph=True)
+    #     # Test fresh backward
+    #     unet = self.actor.unet.module if hasattr(self.actor.unet, 'module') else self.actor.unet
+    #     unet.zero_grad()
+    #     fresh_loss = -fresh_log_prob
+    #     fresh_loss.backward(retain_graph=True)
         
-        fresh_grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
-        fresh_grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
+    #     fresh_grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
+    #     fresh_grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
         
-        print(f"   Fresh trajectory - Params with grads: {fresh_grad_count}")
-        print(f"   Fresh trajectory - Grad norm: {fresh_grad_norm:.6f}")
+    #     print(f"   Fresh trajectory - Params with grads: {fresh_grad_count}")
+    #     print(f"   Fresh trajectory - Grad norm: {fresh_grad_norm:.6f}")
         
-        # Now test recalculated log prob (simulating your PPO update)
-        unet.zero_grad()
-        recalc_log_prob = self.actor.calculate_log_prob(fresh_trajectory)
-        print(f"   Recalc log prob: {recalc_log_prob.item():.8f}, requires_grad: {recalc_log_prob.requires_grad}")
+    #     # Now test recalculated log prob (simulating your PPO update)
+    #     unet.zero_grad()
+    #     recalc_log_prob = self.actor.calculate_log_prob(fresh_trajectory)
+    #     print(f"   Recalc log prob: {recalc_log_prob.item():.8f}, requires_grad: {recalc_log_prob.requires_grad}")
         
-        recalc_loss = -recalc_log_prob
-        recalc_loss.backward()
+    #     recalc_loss = -recalc_log_prob
+    #     recalc_loss.backward()
         
-        recalc_grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
-        recalc_grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
+    #     recalc_grad_count = sum(1 for p in unet.parameters() if p.grad is not None)
+    #     recalc_grad_norm = sum(p.grad.norm().item() for p in unet.parameters() if p.grad is not None)
         
-        print(f"   Recalc trajectory - Params with grads: {recalc_grad_count}")
-        print(f"   Recalc trajectory - Grad norm: {recalc_grad_norm:.6f}")
+    #     print(f"   Recalc trajectory - Params with grads: {recalc_grad_count}")
+    #     print(f"   Recalc trajectory - Grad norm: {recalc_grad_norm:.6f}")
         
-        unet.zero_grad()
-        return fresh_grad_count > 0, recalc_grad_count > 0
+    #     unet.zero_grad()
+    #     return fresh_grad_count > 0, recalc_grad_count > 0
 
-    # Add this to your DiffusionPPOAgent class and call it before update():
-    def run_gradient_tests(self):
-        """Run all gradient flow tests"""
-        print("="*60)
-        print("🔬 RUNNING GRADIENT FLOW TESTS")
-        print("="*60)
+    # # Add this to your DiffusionPPOAgent class and call it before update():
+    # def run_gradient_tests(self):
+    #     """Run all gradient flow tests"""
+    #     print("="*60)
+    #     print("🔬 RUNNING GRADIENT FLOW TESTS")
+    #     print("="*60)
         
-        test1_pass = self.test_direct_unet_gradients()
-        test2_pass = self.test_policy_network_gradients()  
-        test3_fresh, test3_recalc = self.test_stored_vs_fresh_trajectories()
+    #     test1_pass = self.test_direct_unet_gradients()
+    #     test2_pass = self.test_policy_network_gradients()  
+    #     test3_fresh, test3_recalc = self.test_stored_vs_fresh_trajectories()
         
-        print("\n📊 TEST RESULTS:")
-        print(f"   Direct UNet: {'✅ PASS' if test1_pass else '❌ FAIL'}")
-        print(f"   Policy Network: {'✅ PASS' if test2_pass else '❌ FAIL'}")
-        print(f"   Fresh Trajectory: {'✅ PASS' if test3_fresh else '❌ FAIL'}")
-        print(f"   Recalc Trajectory: {'✅ PASS' if test3_recalc else '❌ FAIL'}")
+    #     print("\n📊 TEST RESULTS:")
+    #     print(f"   Direct UNet: {'✅ PASS' if test1_pass else '❌ FAIL'}")
+    #     print(f"   Policy Network: {'✅ PASS' if test2_pass else '❌ FAIL'}")
+    #     print(f"   Fresh Trajectory: {'✅ PASS' if test3_fresh else '❌ FAIL'}")
+    #     print(f"   Recalc Trajectory: {'✅ PASS' if test3_recalc else '❌ FAIL'}")
         
-        if test1_pass and not test2_pass:
-            print("\n🎯 DIAGNOSIS: Issue in DiffusionPolicyNetwork or trajectory recording")
-        elif test1_pass and test2_pass and test3_fresh and not test3_recalc:
-            print("\n🎯 DIAGNOSIS: Issue with calculate_log_prob method")
-        elif not test1_pass:
-            print("\n🎯 DIAGNOSIS: Issue with UNet setup (DataParallel, optimizer, etc.)")
+    #     if test1_pass and not test2_pass:
+    #         print("\n🎯 DIAGNOSIS: Issue in DiffusionPolicyNetwork or trajectory recording")
+    #     elif test1_pass and test2_pass and test3_fresh and not test3_recalc:
+    #         print("\n🎯 DIAGNOSIS: Issue with calculate_log_prob method")
+    #     elif not test1_pass:
+    #         print("\n🎯 DIAGNOSIS: Issue with UNet setup (DataParallel, optimizer, etc.)")
         
-        print("="*60)
+    #     print("="*60)
 
     # def monitor_gpu_memory(self, location=""):
     #     """Monitor GPU memory usage with location context"""
@@ -699,9 +750,6 @@ class DiffusionPPOAgent:
             return
         
         print("Starting PPO update...")
-        # logger = log_utils.initialize_logger(self.training_start, CATEGORY)
-
-        # self.monitor_gpu_memory("Before update")
 
         # Aggressive cache clearing
         torch.cuda.empty_cache()
@@ -744,11 +792,9 @@ class DiffusionPPOAgent:
         print("📊 Logging value predictions and returns to CSV...")
         for value in memo_values.flatten():
             log_utils.log_value_prediction(float(value))
-        log_utils.save_value_predictions()
         
         for return_val in memo_returns.flatten():
             log_utils.log_return(float(return_val))
-        log_utils.save_returns()
         
         # Convert to tensors
         memo_features_tensor = torch.from_numpy(np.array(memo_features)).to(
@@ -767,8 +813,8 @@ class DiffusionPPOAgent:
         )
         
         # Get old policy log probabilities
-        old_log_probs = torch.tensor([lp if isinstance(lp, float) else lp.item() 
-                              for lp in memo_log_probs], dtype=self.dtype).to(device)
+        # old_log_probs = torch.tensor([lp if isinstance(lp, float) else lp.item() 
+        #                       for lp in memo_log_probs], dtype=self.dtype).to(device)
         
         # Accumulate losses
         all_actor_losses = []

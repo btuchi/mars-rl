@@ -39,8 +39,6 @@ echo "📦 Syncing all training results folders..."
 rsync -avzhP --update \
     --include="outputs/" \
     --include="outputs/**" \
-    --include="models/" \
-    --include="models/**" \
     --include="plots/" \
     --include="plots/**" \
     --include="images/" \

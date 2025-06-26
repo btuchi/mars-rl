@@ -1,0 +1,12 @@
+=== DIFFUSION PPO TRAINING SUMMARY ===
+Category: crater
+Timestamp: 20250625192639
+Started: 2025-06-25 19:26:39
+Ended: 2025-06-25 19:27:32
+Completed: True
+Interruption: Unexpected exit
+Total Episodes: 0
+Total Updates: 0
+Best Reward: -inf
+Final Avg Reward: 0.0000
+==================================================

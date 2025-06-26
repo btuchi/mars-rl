@@ -110,7 +110,7 @@ class DiffusionSampler:
     def sample_with_trajectory_recording(
         self,
         prompt: str,
-        num_inference_steps: int = 50,
+        num_inference_steps: int = 20,
         guidance_scale: float = 8.0,
         height: int = 512,
         width: int = 512,
@@ -260,7 +260,7 @@ class DiffusionSampler:
         return trajectories
 
 # Utility functions
-def extract_features_from_trajectory(trajectory: DiffusionTrajectory, feature_extractor) -> torch.Tensor:
+def extract_features_from_trajectory(trajectory: DiffusionTrajectory, model, preprocess) -> torch.Tensor:
     """Extract CLIP features from the final image of a trajectory."""
     # Convert final image to PIL format for CLIP
     final_image = trajectory.final_image.squeeze(0).cpu()
@@ -270,7 +270,7 @@ def extract_features_from_trajectory(trajectory: DiffusionTrajectory, feature_ex
     pil_image = to_pil(final_image)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, preprocess = clip.load("ViT-B/32", device=device)
+    # model, preprocess = clip.load("ViT-B/32", device=device)
     
     image_tensor = preprocess(pil_image).unsqueeze(0).to(device)
     

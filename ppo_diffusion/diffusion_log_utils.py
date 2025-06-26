@@ -62,7 +62,7 @@ class TrainingLogger:
             self.value_prediction_data = []
             
             # Auto-save every N episodes
-            self.save_frequency = 10
+            self.save_frequency = 5
             self.last_save_episode = 0
             
             # Setup graceful shutdown handlers
@@ -111,6 +111,10 @@ class TrainingLogger:
         
         # Also save to dedicated list for CSV
         self.value_prediction_data.append(value_entry)
+
+        # Auto-save every 10 entries
+        if len(self.value_prediction_data) % 10 == 0:  # Save every 10 entries
+            self.save_value_predictions()
     
     def log_return(self, return_value: float):
         """Log return value data"""
@@ -124,7 +128,11 @@ class TrainingLogger:
         
         # Also save to dedicated list for CSV
         self.return_data.append(return_entry)
-        
+
+        # Auto-save every 10 entries
+        if len(self.return_data) % 10 == 0:  # Save every 20 entries
+            self.save_returns()
+
         
     def log_episode(self, episode: int, prompt: str, individual_rewards: list, 
                    avg_reward: float, best_reward: float):
@@ -408,7 +416,7 @@ def plot_from_csv(training_timestamp: str, category: str = "crater"):
     axes[1, 0].grid(True, alpha=0.3)
         
     # Ensure we have the same number of predictions and returns
-    min_len = min(len(value_predictions_df), len(returns_df)) if value_predictions_df and returns_df else 0
+    min_len = min(len(value_predictions_df), len(returns_df)) if value_predictions_df is not None and returns_df is not None else 0
     if min_len > 0:
         pred_values = value_predictions_df['value_prediction'].iloc[:min_len]
         return_values = returns_df['return_value'].iloc[:min_len]
