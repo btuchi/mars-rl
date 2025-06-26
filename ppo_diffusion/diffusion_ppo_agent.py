@@ -110,19 +110,42 @@ class DiffusionValueNetwork(nn.Module):
         super(DiffusionValueNetwork, self).__init__()
         
         # Simple MLP for value estimation
-        self.fc1 = nn.Linear(feature_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, 1)
+        # self.fc1 = nn.Linear(feature_dim, hidden_dim)
+        # self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        # self.fc3 = nn.Linear(hidden_dim, 1)
+
+        self.network = nn.Sequential(
+            nn.Linear(feature_dim, 1024),
+            nn.BatchNorm1d(1024),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            
+            nn.Linear(1024, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            
+            nn.Linear(128, 1)
+        )
         
-        self.relu = nn.ReLU()
+        # self.relu = nn.ReLU()
     
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         """Estimate value from prompt features"""
-        features = features.to(dtype=torch.float32)
-        x = self.relu(self.fc1(features))
-        x = self.relu(self.fc2(x))
-        value = self.fc3(x)
-        return value
+        # features = features.to(dtype=torch.float32)
+        # x = self.relu(self.fc1(features))
+        # x = self.relu(self.fc2(x))
+        # value = self.fc3(x)
+        # return value
+        return self.network(features)
 
 
 class DiffusionReplayMemory:
@@ -267,8 +290,8 @@ class DiffusionRewardFunction:
                 print(f"  🚨 Image {i}: NOISE DETECTED (CLIP={content_score:.3f}) -> Penalty")
             else:
                 # Weighted combination of content quality and diversity
-                content_weight = 0.6  # Prioritize content quality
-                diversity_weight = 0.4
+                content_weight = 0.65  # Prioritize content quality
+                diversity_weight = 0.35
                 
                 final_reward = (content_weight * content_score + 
                               diversity_weight * self.normalize_reward(diversity_reward))
