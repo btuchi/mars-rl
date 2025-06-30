@@ -2,11 +2,14 @@
 
 import torch
 import torch.nn as nn
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, TYPE_CHECKING
 import numpy as np
 from dataclasses import dataclass
 from diffusers import StableDiffusionPipeline
 from ..utils.device import clear_gpu_cache
+if TYPE_CHECKING:
+    from ..models.policy import LatentDiversityPolicy
+
 
 
 @dataclass
@@ -27,6 +30,7 @@ class DiffusionTrajectory:
     condition: torch.Tensor
     reward: Optional[float] = None
     total_log_prob: Optional[torch.Tensor] = None
+    policy_log_prob: Optional[torch.Tensor] = None  # For policy-modified sampling
 
 class DiffusionSampler:
     """Diffusion model sampler that records trajectories for RL training"""
@@ -99,7 +103,7 @@ class DiffusionSampler:
     def sample_with_trajectory_recording(
         self,
         prompt: str,
-        num_inference_steps: int = 20,
+        num_inference_steps: int = 50,
         guidance_scale: float = 8.0,
         height: int = 512,
         width: int = 512,
@@ -211,4 +215,110 @@ class DiffusionSampler:
         clear_gpu_cache()
 
         return trajectory
+    
+    def sample_with_policy_modification(
+        self,
+        prompt: str,
+        policy_network: LatentDiversityPolicy,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 8.0,
+        height: int = 512,
+        width: int = 512,
+        generator: Optional[torch.Generator] = None
+    ) -> DiffusionTrajectory:
+        """
+        Sample with policy network modifications to initial latents
+        """
+        batch_size = 1
         
+        # Encode prompt
+        text_embeddings = self.encode_prompt(prompt, batch_size)
+        
+        # Get text features for policy network (use the conditional part)
+        text_features = text_embeddings[1:2].mean(dim=1)  # [1, 768] -> [1, 512] after mean
+        
+        # For classifier-free guidance
+        uncond_embeddings = self.encode_prompt("", batch_size)
+        full_text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+        
+        # Sample initial noise
+        latents_shape = (batch_size, 4, height // 8, width // 8)  # 4, 64, 64
+        base_latents = torch.randn(
+            latents_shape,
+            generator=generator, 
+            device=self.device,
+            dtype=self.dtype
+        )
+        
+        # Get policy modification
+        with torch.enable_grad():  # Enable gradients for policy network
+            policy_network.train()  # Make sure policy is in train mode
+            latent_modification = policy_network(text_features)
+            
+            # Calculate simple log probability for the modification
+            policy_log_prob = -0.5 * torch.sum(latent_modification ** 2)  # Gaussian prior
+        
+        # Apply modification
+        modified_latents = base_latents + latent_modification
+        latents = modified_latents * self.scheduler.init_noise_sigma
+        
+        # Set timesteps
+        self.scheduler.set_timesteps(num_inference_steps, device=self.device)
+        timesteps = self.scheduler.timesteps
+        
+        # Standard denoising loop with FROZEN UNet
+        trajectory_steps = []
+        
+        for i, t in enumerate(timesteps):
+            # Expand latents for classifier-free guidance
+            latent_model_input = torch.cat([latents] * 2)
+            latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+            
+            timestep = t.expand(latent_model_input.shape[0])
+            
+            # UNet prediction (NO GRADIENTS - it's frozen)
+            with torch.no_grad():
+                noise_pred = self.unet(
+                    latent_model_input,
+                    timestep,
+                    encoder_hidden_states=full_text_embeddings,
+                    return_dict=False
+                )[0]
+            
+            # Classifier-free guidance
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred_guided = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+            
+            # Denoise
+            scheduler_output = self.scheduler.step(noise_pred_guided, t, latents, return_dict=True)
+            prev_latents = scheduler_output.prev_sample
+            
+            # Record step (simplified since UNet is frozen)
+            step = TrajectoryStep(
+                timestep=t.item(),
+                state=latents.clone().detach(),
+                action=prev_latents.clone().detach(),
+                condition=full_text_embeddings[1:2].clone().detach(),
+                log_prob=torch.tensor(0.0),  # Step log prob not needed
+                noise_pred=noise_pred_guided.clone().detach()
+            )
+            trajectory_steps.append(step)
+            
+            latents = prev_latents
+        
+        # Decode final image
+        with torch.no_grad():
+            latents = 1 / 0.18215 * latents
+            final_image = self.vae.decode(latents).sample
+            final_image = (final_image / 2 + 0.5).clamp(0, 1)
+        
+        # Create trajectory with policy log prob
+        trajectory = DiffusionTrajectory(
+            steps=trajectory_steps,
+            final_image=final_image.detach(),
+            condition=full_text_embeddings[1:2].clone().detach(),
+            policy_log_prob=policy_log_prob  # NEW: Store policy log prob
+        )
+        
+        return trajectory
+            

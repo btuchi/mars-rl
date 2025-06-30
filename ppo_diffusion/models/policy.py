@@ -1,5 +1,5 @@
 """Policy network for diffusion models"""
-
+from typing import TYPE_CHECKING, Tuple, Optional
 import torch
 import torch.nn as nn
 from typing import Tuple
@@ -57,10 +57,18 @@ class DiffusionPolicyNetwork(nn.Module):
     def __init__(self, sampler: DiffusionSampler, num_inference_steps: int = 20):
         super(DiffusionPolicyNetwork, self).__init__()
         self.sampler = sampler
-        # self.unet = sampler.unet  # This is our "policy network"
         # TODO: ResNet? VGG16?
         self.unet = sampler.unet  # This is our "policy network"
         self.num_inference_steps = num_inference_steps
+
+        # NEW: Small policy network instead of training UNet
+        self.diversity_policy = LatentDiversityPolicy(text_dim=512)
+        
+        # FREEZE the UNet - we won't train it anymore
+        for param in self.unet.parameters():
+            param.requires_grad = False
+        
+        print("✅ UNet frozen - only training LatentDiversityPolicy")
         
     def forward(self, prompt: str) -> DiffusionTrajectory:
         """
@@ -71,8 +79,13 @@ class DiffusionPolicyNetwork(nn.Module):
             - complete trajectory (20 denoising actions)
             - instead of an action distribution (vanilla)
         """
-        return self.sampler.sample_with_trajectory_recording(
+        # return self.sampler.sample_with_trajectory_recording(
+        #     prompt=prompt,
+        #     num_inference_steps=self.num_inference_steps
+        # )
+        return self.sampler.sample_with_policy_modification(
             prompt=prompt,
+            policy=self.diversity_policy,
             num_inference_steps=self.num_inference_steps
         )
     
@@ -84,25 +97,32 @@ class DiffusionPolicyNetwork(nn.Module):
         Return
             - the log probability this trajectory happens to generate images
         """
-        if trajectory.total_log_prob is not None:
-            print("log probability from trajectory:", trajectory.total_log_prob)
-            return trajectory.total_log_prob
-        else:
+        # if trajectory.total_log_prob is not None:
+        #     print("log probability from trajectory:", trajectory.total_log_prob)
+        #     return trajectory.total_log_prob
+        # else:
 
-            log_probs = []
+        #     log_probs = []
 
-            # Each step has its own log probability
-            for step in trajectory.steps:
-                # Ensure log_prob is a tensor with gradients
-                # print("log probability:", step.log_prob)
-                if isinstance(step.log_prob, torch.Tensor):
-                    log_probs.append(step.log_prob)
-                else:
-                    # Convert to tensor if needed
-                    log_probs.append(torch.tensor(step.log_prob, requires_grad=True))
+        #     # Each step has its own log probability
+        #     for step in trajectory.steps:
+        #         # Ensure log_prob is a tensor with gradients
+        #         # print("log probability:", step.log_prob)
+        #         if isinstance(step.log_prob, torch.Tensor):
+        #             log_probs.append(step.log_prob)
+        #         else:
+        #             # Convert to tensor if needed
+        #             log_probs.append(torch.tensor(step.log_prob, requires_grad=True))
             
-            # Total log probability = sum of all steps
-            return torch.stack(log_probs).sum()
+        #     # Total log probability = sum of all steps
+        #     return torch.stack(log_probs).sum()
+
+        # MODIFIED: for diversity policy network
+        if hasattr(trajectory, 'policy_log_prob'):
+            return trajectory.policy_log_prob
+        else:
+            # Fallback to simple calculation
+            return torch.tensor(0.0, requires_grad=True, device=self.sampler.device)
     
     def select_trajectory(self, prompt: str) -> Tuple[DiffusionTrajectory, torch.Tensor]:
         """

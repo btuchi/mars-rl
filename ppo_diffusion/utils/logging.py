@@ -306,3 +306,4 @@ def finalize_logging():
     """Complete logging and save final files"""
     if _logger:
         _logger.save_all_logs(final=True)
+

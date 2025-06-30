@@ -38,16 +38,14 @@ class DiffusionRewardFunction:
         batch_features = []
         content_scores = []
 
-        # Encode the prompt once and reuse
-        with torch.no_grad():
-            text_features = self.feature_extractor.model.encode_text(
-                torch.cat([torch.zeros(1, 77, dtype=torch.long), 
-                          torch.tensor([self.feature_extractor.model.token_embedding.weight.shape[0]-1])]).to(self.feature_extractor.device)
-            )
-            # Proper text encoding
-            import clip
-            text_features = self.feature_extractor.model.encode_text(clip.tokenize([prompt]).to(self.feature_extractor.device))
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        text_features = self.feature_extractor.extract_text_features(prompt)
+
+        # Encode the prompt using the feature extractor's method
+        # with torch.no_grad():
+            # Convert to tensor for similarity calculation
+            # text_features_tensor = torch.from_numpy(text_features).to(self.feature_extractor.device).unsqueeze(0)
+            # # Normalize
+            # text_features_tensor = text_features_tensor / text_features_tensor.norm(dim=-1, keepdim=True)
 
         for trajectory in trajectories:
             # Extract features using the same CLIP model (no duplication)
@@ -57,7 +55,7 @@ class DiffusionRewardFunction:
             # Convert features back to tensor for similarity calculation
             image_features = torch.from_numpy(features).to(self.feature_extractor.device).unsqueeze(0)
             
-            similarity_score = self.feature_extractor.calculate_clip_similarity(image_features, text_features)
+            similarity_score = self.feature_extractor.calculate_similarity(image_features, text_features)
             content_scores.append(similarity_score)
 
         # batch_features = [traj_feat1, traj_feat2, traj_feat3, traj_feat4, ... traj_featM]

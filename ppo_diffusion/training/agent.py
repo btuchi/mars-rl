@@ -61,8 +61,13 @@ class DiffusionPPOAgent:
             actor_params = self.actor.unet.parameters()
         
         # Optimizers
-        self.actor_optimizer = optim.AdamW(actor_params, lr=self.LR_ACTOR, weight_decay=1e-4)
+        self.actor_optimizer = optim.AdamW(
+            self.actor.diversity_policy.parameters(),
+            lr=self.LR_ACTOR,
+            weight_decay=1e-4
+        )
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.LR_CRITIC)
+        print(f"🎯 Only training {sum(p.numel() for p in self.actor.diversity_policy.parameters())} policy parameters")
         
         # Components
         self.replay_buffer = DiffusionReplayMemory(batch_size)
@@ -281,12 +286,13 @@ class DiffusionPPOAgent:
         clear_gpu_cache()
 
         # Copy current actor to old_actor
-        if hasattr(self.actor.unet, 'module') and hasattr(self.old_actor.unet, 'module'):
-            self.old_actor.unet.module.load_state_dict(self.actor.unet.module.state_dict())
-        elif hasattr(self.actor.unet, 'module'):
-            self.old_actor.unet.load_state_dict(self.actor.unet.module.state_dict())
-        else:
-            self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
+        # if hasattr(self.actor.unet, 'module') and hasattr(self.old_actor.unet, 'module'):
+        #     self.old_actor.unet.module.load_state_dict(self.actor.unet.module.state_dict())
+        # elif hasattr(self.actor.unet, 'module'):
+        #     self.old_actor.unet.load_state_dict(self.actor.unet.module.state_dict())
+        # else:
+        #     self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
+        self.old_actor.diversity_policy.load_state_dict(self.actor.diversity_policy.state_dict())
         
         # Get trajectory data
         memo_features, memo_prompts, memo_trajectories, memo_rewards, memo_values, memo_log_probs, memo_log_prob_tensors, batches = self.replay_buffer.sample()

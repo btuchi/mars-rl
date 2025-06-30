@@ -5,8 +5,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
 from .constants import DEFAULT_CATEGORY
-from .logging import load_training_data
-
 
 def plot_diffusion_training(reward_buffer, actor_loss_log, critic_loss_log, best_reward_log, 
                           value_prediction_log, return_log, final_episode=None, 

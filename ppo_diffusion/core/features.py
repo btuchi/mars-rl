@@ -51,6 +51,19 @@ class FeatureExtractor:
     def calculate_similarity(self, image_features: torch.Tensor, text_features: torch.Tensor) -> float:
         """Calculate similarity between image and text features"""
         with torch.no_grad():
+
+            # Convert to tensors if needed
+            if isinstance(image_features, np.ndarray):
+                image_features = torch.from_numpy(image_features).to(self.device)
+            if isinstance(text_features, np.ndarray):
+                text_features = torch.from_numpy(text_features).to(self.device)
+            
+            # Ensure proper dimensions
+            if image_features.dim() == 1:
+                image_features = image_features.unsqueeze(0)
+            if text_features.dim() == 1:
+                text_features = text_features.unsqueeze(0)
+            
             # Normalize features
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
