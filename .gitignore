@@ -60,3 +60,5 @@ generated_craters/
 
 # === Git Ignore This Gitignore ===
 .gitignore
+
+get-pip.py
