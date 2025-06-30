@@ -1,0 +1,28 @@
+# File: utils/constants.py
+"""Global constants and configuration"""
+
+# Training configuration
+DEFAULT_CATEGORY = "crater"
+DEFAULT_MODEL_ID = "CompVis/stable-diffusion-v1-4"
+
+# PPO hyperparameters
+DEFAULT_LR_ACTOR = 3e-5
+DEFAULT_LR_CRITIC = 1e-3
+DEFAULT_GAMMA = 0.9
+DEFAULT_LAMBDA = 0.95
+DEFAULT_EPSILON_CLIP = 0.1
+
+# Training parameters
+DEFAULT_NUM_EPISODES = 1000
+DEFAULT_BATCH_SIZE = 4
+DEFAULT_EPISODES_PER_UPDATE = 1
+DEFAULT_NUM_INFERENCE_STEPS = 20
+DEFAULT_IMAGES_PER_PROMPT = 4
+
+# Image settings
+DEFAULT_HEIGHT = 512
+DEFAULT_WIDTH = 512
+DEFAULT_GUIDANCE_SCALE = 8.0
+
+# Logging
+LOG_SAVE_FREQUENCY = 5

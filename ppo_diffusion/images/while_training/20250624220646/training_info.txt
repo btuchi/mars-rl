@@ -1,8 +1,0 @@
-Training Session: 20250624220646
-Started: 2025-06-24 22:07:13
-Images per prompt: 4
-Device: cuda
-Dtype: torch.float32
-==================================================
-Episode Log:
-Ep 0000: 'ground view of tiny mars craters on windswept surface with weathered rims and smooth centers' | Avg: 0.0342 | Rewards: [0.0733452319196119, 0.0, 0.04907457563660559, 0.014501292487923978]

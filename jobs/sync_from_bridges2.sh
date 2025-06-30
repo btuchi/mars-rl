@@ -37,8 +37,6 @@ SYNC_SUCCESS=0
 # Sync all three folders in one command (single password prompt)
 echo "📦 Syncing all training results folders..."
 rsync -avzhP --update \
-    --include="outputs/" \
-    --include="outputs/**" \
     --include="plots/" \
     --include="plots/**" \
     --include="images/" \

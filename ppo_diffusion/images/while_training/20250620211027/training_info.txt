@@ -1,7 +1,0 @@
-Training Session: 20250620211027
-Started: 2025-06-20 21:10:31
-Images per prompt: 4
-Device: cuda
-Dtype: torch.float32
-==================================================
-Episode Log:

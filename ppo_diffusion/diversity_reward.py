@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from sklearn.metrics.pairwise import polynomial_kernel, rbf_kernel
+from sklearn.metrics.pairwise import rbf_kernel
 
 def calculate_mmd_reward(generated_features, reference_features, gamma=None):
     """Helper function to calculate MMD reward from pre-computed features"""
