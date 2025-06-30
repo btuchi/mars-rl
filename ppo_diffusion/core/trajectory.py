@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from diffusers import StableDiffusionPipeline
 from ..utils.device import clear_gpu_cache
 
+
 @dataclass
 class TrajectoryStep:
     """Represents a single step in the diffusion trajectory for RL training"""

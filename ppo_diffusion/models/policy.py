@@ -5,6 +5,45 @@ import torch.nn as nn
 from typing import Tuple
 from ..core.trajectory import DiffusionSampler, DiffusionTrajectory
 
+# Add this new class to diffusion_ppo_agent.py
+class LatentDiversityPolicy(nn.Module):
+    """
+    Small policy network that modifies initial latents for diversity
+    Input: Text features from prompt
+    Output: Latent space modifications
+    """
+    def __init__(self, text_dim=512, latent_dim=4, latent_size=64):
+        super(LatentDiversityPolicy, self).__init__()
+        
+        self.policy_net = nn.Sequential(
+            nn.Linear(text_dim, 512),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, 256),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, latent_dim * latent_size * latent_size),  # 4*64*64 = 16384
+            nn.Tanh()  # Bounded output [-1, +1]
+        )
+        
+        self.modification_scale = 0.1  # How much to modify latents
+        
+    def forward(self, text_features):
+        """
+        Args:
+            text_features: [batch_size, 512] CLIP text features
+        Returns:
+            latent_modification: [batch_size, 4, 64, 64] modification to add to initial latents
+        """
+        batch_size = text_features.shape[0]
+        
+        # Generate latent modification
+        latent_mod = self.policy_net(text_features)
+        latent_mod = latent_mod.reshape(batch_size, 4, 64, 64)
+        
+        # Scale the modification to be small
+        return latent_mod * self.modification_scale
+
 class DiffusionPolicyNetwork(nn.Module):
     """
     Policy Network for Diffusion Models:
@@ -18,8 +57,9 @@ class DiffusionPolicyNetwork(nn.Module):
     def __init__(self, sampler: DiffusionSampler, num_inference_steps: int = 20):
         super(DiffusionPolicyNetwork, self).__init__()
         self.sampler = sampler
-        self.unet = sampler.unet  # This is our "policy network"
+        # self.unet = sampler.unet  # This is our "policy network"
         # TODO: ResNet? VGG16?
+        self.unet = sampler.unet  # This is our "policy network"
         self.num_inference_steps = num_inference_steps
         
     def forward(self, prompt: str) -> DiffusionTrajectory:
