@@ -55,10 +55,10 @@ class DiffusionPPOAgent:
         self.critic = DiffusionValueNetwork(feature_dim).to(self.device).to(self.dtype)
 
         # Handle DataParallel case for optimizers
-        if hasattr(self.actor.unet, 'module'):
-            actor_params = self.actor.unet.module.parameters()
-        else:
-            actor_params = self.actor.unet.parameters()
+        # if hasattr(self.actor.unet, 'module'):
+        #     actor_params = self.actor.unet.module.parameters()
+        # else:
+        #     actor_params = self.actor.unet.parameters()
         
         # Optimizers
         self.actor_optimizer = optim.AdamW(
@@ -199,8 +199,10 @@ class DiffusionPPOAgent:
             log_prob_detached = log_prob_tensor.detach()
 
             # Clear the trajectory's gradient connection after storing what we need
-            if hasattr(trajectory, 'total_log_prob'):
+            if hasattr(trajectory, 'total_log_prob') and trajectory.total_log_prob is not None:
                 trajectory.total_log_prob = trajectory.total_log_prob.detach().requires_grad_(True)
+            elif hasattr(trajectory, 'policy_log_prob') and trajectory.policy_log_prob is not None:
+                trajectory.policy_log_prob = trajectory.policy_log_prob.detach().requires_grad_(True)
 
             trajectories.append(trajectory)
             log_probs.append(log_prob_value)
@@ -407,11 +409,8 @@ class DiffusionPPOAgent:
                 #         param_count += 1
                 # print(f"Total gradient norm: {total_grad_norm}, Params with gradients: {param_count}")
 
-                # Handle gradient clipping for DataParallel
-                if hasattr(self.actor.unet, 'module'):
-                    torch.nn.utils.clip_grad_norm_(self.actor.unet.module.parameters(), max_norm=0.5)
-                else:
-                    torch.nn.utils.clip_grad_norm_(self.actor.unet.parameters(), max_norm=0.5)
+                # Handle gradient clipping for diversity policy (not UNet)
+                torch.nn.utils.clip_grad_norm_(self.actor.diversity_policy.parameters(), max_norm=0.5)
                 
                 self.actor_optimizer.step()
 
@@ -428,12 +427,11 @@ class DiffusionPPOAgent:
                 print(f"🔍 Critic gradient norm: {total_norm:.6f}")
 
                 actor_grad_norm = 0
-                unet_params = self.actor.unet.module.parameters() if hasattr(self.actor.unet, 'module') else self.actor.unet.parameters()
-                for param in unet_params:
+                for param in self.actor.diversity_policy.parameters():
                     if param.grad is not None:
                         actor_grad_norm += param.grad.data.norm(2).item() ** 2
                 actor_grad_norm = actor_grad_norm ** 0.5
-                print(f"🔍 Actor gradient norm: {actor_grad_norm:.6f}")
+                print(f"🔍 Actor (diversity policy) gradient norm: {actor_grad_norm:.6f}")
 
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
                 self.critic_optimizer.step()
@@ -474,16 +472,12 @@ class DiffusionPPOAgent:
         return None, None, None, None
     
     def save_policy(self):
-        """Save the trained policy (UNet weights)"""
+        """Save the trained diversity policy"""
         models_dir = Path(__file__).parent.parent / "outputs" / "models"
         models_dir.mkdir(exist_ok=True)
-        policy_path = models_dir / f"{DEFAULT_CATEGORY}_diffusion_ppo_policy_{self.training_start}.pth"
+        policy_path = models_dir / f"{DEFAULT_CATEGORY}_diversity_policy_{self.training_start}.pth"
 
-        # Handle DataParallel case for saving
-        if hasattr(self.actor.unet, 'module'):
-            state_dict = self.actor.unet.module.state_dict()
-        else:
-            state_dict = self.actor.unet.state_dict()
-
+        # Save diversity policy state dict
+        state_dict = self.actor.diversity_policy.state_dict()
         torch.save(state_dict, policy_path)
-        print(f"Diffusion PPO policy saved to: {policy_path}")
+        print(f"Diversity policy saved to: {policy_path}")

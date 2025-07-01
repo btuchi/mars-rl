@@ -45,8 +45,7 @@ rsync -avzhP --update \
     --include="logs/**" \
     --include="images/" \
     --include="images/**" \
-    --exclude="*" \
-    "${BRIDGES2_USER}@${BRIDGES2_HOST}:/ocean/projects/eng240004p/btuchi/BRYCE/RL/ppo_diffusion/" "${LOCAL_DIR}/ppo_diffusion/"
+    "${BRIDGES2_USER}@${BRIDGES2_HOST}:/ocean/projects/eng240004p/btuchi/BRYCE/RL/ppo_diffusion/outputs/" "${LOCAL_DIR}/ppo_diffusion/outputs/"
 
 if [ $? -eq 0 ]; then 
     SYNC_SUCCESS=3
@@ -60,10 +59,7 @@ if [ $SYNC_SUCCESS -eq 3 ]; then
     echo ""
     echo "✅ All syncs completed successfully!"
     echo ""
-    echo "Files synced to: ${LOCAL_DIR}/ppo_diffusion/"
-    echo "  📄 Job outputs: outputs/"
-    echo "  🏗️ Model weights: models/"  
-    echo "  📊 Training plots: plots/"
+    echo "Files synced to: ${LOCAL_DIR}/ppo_diffusion/outputs"
 else
     echo ""
     echo "⚠️ Some syncs may have failed ($SYNC_SUCCESS/3 successful)"

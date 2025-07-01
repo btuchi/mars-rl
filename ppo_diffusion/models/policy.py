@@ -2,8 +2,6 @@
 from typing import TYPE_CHECKING, Tuple, Optional
 import torch
 import torch.nn as nn
-from typing import Tuple
-from ..core.trajectory import DiffusionSampler, DiffusionTrajectory
 
 # Add this new class to diffusion_ppo_agent.py
 class LatentDiversityPolicy(nn.Module):
@@ -26,12 +24,12 @@ class LatentDiversityPolicy(nn.Module):
             nn.Tanh()  # Bounded output [-1, +1]
         )
         
-        self.modification_scale = 0.1  # How much to modify latents
+        self.modification_scale = 0.5  # How much to modify latents
         
     def forward(self, text_features):
         """
         Args:
-            text_features: [batch_size, 512] CLIP text features
+            text_features: [batch_size, 768] Stable Diffusion text features
         Returns:
             latent_modification: [batch_size, 4, 64, 64] modification to add to initial latents
         """
@@ -54,15 +52,19 @@ class DiffusionPolicyNetwork(nn.Module):
     Output:
         - Complete trajectory with log probabilities --> The Action we are trying to optimize
     """
-    def __init__(self, sampler: DiffusionSampler, num_inference_steps: int = 20):
+    def __init__(self, sampler, num_inference_steps: int = 20):
         super(DiffusionPolicyNetwork, self).__init__()
         self.sampler = sampler
         # TODO: ResNet? VGG16?
         self.unet = sampler.unet  # This is our "policy network"
         self.num_inference_steps = num_inference_steps
 
-        # NEW: Small policy network instead of training UNet
-        self.diversity_policy = LatentDiversityPolicy(text_dim=512)
+        # NEW: Small policy network instead of training UNet  
+        # Stable Diffusion text embeddings are 768-dimensional
+        self.diversity_policy = LatentDiversityPolicy(text_dim=768)
+        
+        # Move diversity policy to same device as sampler
+        self.diversity_policy = self.diversity_policy.to(sampler.device)
         
         # FREEZE the UNet - we won't train it anymore
         for param in self.unet.parameters():
@@ -70,7 +72,7 @@ class DiffusionPolicyNetwork(nn.Module):
         
         print("✅ UNet frozen - only training LatentDiversityPolicy")
         
-    def forward(self, prompt: str) -> DiffusionTrajectory:
+    def forward(self, prompt: str):
         """
         Generate trajectory for given prompt (equivalent to actor forward pass)
         Input:
@@ -85,11 +87,11 @@ class DiffusionPolicyNetwork(nn.Module):
         # )
         return self.sampler.sample_with_policy_modification(
             prompt=prompt,
-            policy=self.diversity_policy,
+            policy_network=self.diversity_policy,
             num_inference_steps=self.num_inference_steps
         )
     
-    def calculate_log_prob(self, trajectory: DiffusionTrajectory) -> torch.Tensor:
+    def calculate_log_prob(self, trajectory) -> torch.Tensor:
         """
         Calculate log probability of trajectory (equivalent to action log prob)
         Arg:
@@ -124,7 +126,7 @@ class DiffusionPolicyNetwork(nn.Module):
             # Fallback to simple calculation
             return torch.tensor(0.0, requires_grad=True, device=self.sampler.device)
     
-    def select_trajectory(self, prompt: str) -> Tuple[DiffusionTrajectory, torch.Tensor]:
+    def select_trajectory(self, prompt: str) -> Tuple:
         """
         Sample trajectory with log prob (equivalent to select_action)
         disabled torch.no_grad() to enable gradient flow for training

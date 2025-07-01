@@ -219,7 +219,7 @@ class DiffusionSampler:
     def sample_with_policy_modification(
         self,
         prompt: str,
-        policy_network: LatentDiversityPolicy,
+        policy_network,
         num_inference_steps: int = 50,
         guidance_scale: float = 8.0,
         height: int = 512,
@@ -235,7 +235,8 @@ class DiffusionSampler:
         text_embeddings = self.encode_prompt(prompt, batch_size)
         
         # Get text features for policy network (use the conditional part)
-        text_features = text_embeddings[1:2].mean(dim=1)  # [1, 768] -> [1, 512] after mean
+        # Keep full 768 dimensions, just take mean over sequence length
+        text_features = text_embeddings.mean(dim=1)  # [1, 77, 768] -> [1, 768]
         
         # For classifier-free guidance
         uncond_embeddings = self.encode_prompt("", batch_size)
