@@ -73,24 +73,25 @@ class DiffusionRewardFunction:
         # Combine content quality + diversity
         hybrid_rewards = []
 
+        # Calculate a reasonable penalty based on diversity reward scale
+        diversity_std = np.std(individual_rewards)
+        diversity_mean = np.mean(individual_rewards)
+        penalty = min(-0.1, diversity_mean - 2 * diversity_std)  # Penalty 2 std devs below mean, max -0.1
+        
         for i, (content_score, diversity_reward) in enumerate(zip(content_scores, individual_rewards)):
-            # QUALITY GATE: Penalize noise heavily
-            if content_score < 0.28:  # Threshold for "this is basically noise"
-                final_reward = -2.0  # Heavy penalty
-                print(f"  🚨 Image {i}: NOISE DETECTED (CLIP={content_score:.3f}) -> Penalty")
+            # QUALITY GATE: Penalize noise, but keep scale reasonable
+            if content_score < 0.27:  # Threshold for "this is basically noise"
+                final_reward = penalty  # Scale-appropriate penalty
+                print(f"  🚨 Image {i}: NOISE DETECTED (CLIP={content_score:.3f}) -> Penalty {penalty:.3f}")
             else:
-                # Weighted combination of content quality and diversity
-                content_weight = 0.0  # Prioritize content quality
-                diversity_weight = 1.0
                 
-                final_reward = (content_weight * content_score + 
-                              diversity_weight * self.normalize_reward(diversity_reward))
+                final_reward = diversity_reward
                 
-                print(f"  ✅ Image {i}: similarity_score={content_score:.3f}, diversity_score={diversity_reward:.3f} -> final_score={final_reward:.3f}")
+                print(f"  ✅ Image {i}: diversity_score={diversity_reward:.3f}")
             
             hybrid_rewards.append(final_reward)
         
-        return np.array(hybrid_rewards)
+        return self.normalize_batch_rewards(np.array(hybrid_rewards))
     
     def normalize_reward(self, reward: float) -> float:
         """Normalize reward based on running statistics"""
@@ -104,3 +105,32 @@ class DiffusionRewardFunction:
         mean_reward = np.mean(self.reward_history)
         std_reward = np.std(self.reward_history)
         return (reward - mean_reward) / (std_reward + 1e-8)
+
+    def normalize_batch_rewards(self, rewards: np.ndarray) -> np.ndarray:
+        """
+        Normalize a batch of rewards using running statistics
+        This ensures all rewards (penalties + diversity) are on the same scale
+        """
+        # Add all rewards to history for running statistics
+        for reward in rewards:
+            self.reward_history.append(reward)
+            if len(self.reward_history) > self.buffer_size:
+                self.reward_history.pop(0)
+        
+        # If we don't have enough history, use simple scaling
+        if len(self.reward_history) < 10:
+            # Simple clipping and scaling for early training
+            clipped_rewards = np.clip(rewards, -2.0, 2.0)
+            return clipped_rewards * 0.8
+        
+        # Use running statistics for normalization
+        mean_reward = np.mean(self.reward_history)
+        std_reward = np.std(self.reward_history)
+        
+        # Normalize the current batch
+        normalized_rewards = (rewards - mean_reward) / (std_reward + 1e-8)
+        
+        # Optional: clip extreme values to prevent PPO instability
+        normalized_rewards = np.clip(normalized_rewards, -5.0, 5.0)
+        
+        return normalized_rewards

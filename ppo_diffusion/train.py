@@ -146,7 +146,7 @@ def main(category: str = DEFAULT_CATEGORY):
                 print(f"Replay buffer size: {len(agent.replay_buffer.trajectories)} trajectories")
                 
                 # Perform PPO update
-                actor_loss, critic_loss, values, returns = agent.update()
+                actor_loss, critic_loss, values, returns, gradient_info = agent.update()
                 episodes_since_update = 0
                 update_counter += 1
                 
@@ -167,7 +167,8 @@ def main(category: str = DEFAULT_CATEGORY):
                         update_num=update_counter,
                         actor_loss=actor_loss,
                         critic_loss=critic_loss,
-                        episode=episode_i+1
+                        episode=episode_i+1,
+                        gradient_info=gradient_info
                     )
 
                     print(f"  ✅ Actor Loss: {actor_loss:.4f}")

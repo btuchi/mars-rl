@@ -36,6 +36,7 @@ class TrainingLogger:
         self.loss_csv = self.logs_dir / "loss_log.csv"
         self.value_csv = self.logs_dir / "value_predictions.csv"
         self.return_csv = self.logs_dir / "returns.csv"
+        self.gradient_csv = self.logs_dir / "gradient_log.csv"
         self.metadata_csv = self.logs_dir / "metadata.csv"
         
         # Initialize metadata
@@ -57,6 +58,7 @@ class TrainingLogger:
         self.loss_data = []
         self.return_data = []
         self.value_prediction_data = []
+        self.gradient_data = []
         
         # Auto-save frequency
         self.save_frequency = LOG_SAVE_FREQUENCY
@@ -123,6 +125,23 @@ class TrainingLogger:
         # Auto-save every 10 entries
         if len(self.return_data) % 10 == 0:
             self.save_returns()
+    
+    def log_gradient_info(self, update_num: int, episode: int, gradient_info: dict):
+        """Log gradient information"""
+        gradient_entry = {
+            'update': update_num,
+            'episode': episode,
+            'actor_grad_before': gradient_info.get('actor_grad_before', 0.0),
+            'actor_grad_after': gradient_info.get('actor_grad_after', 0.0),
+            'critic_grad': gradient_info.get('critic_grad', 0.0),
+            'grad_clipped': gradient_info.get('grad_clipped', False),
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        self.gradient_data.append(gradient_entry)
+        
+        # Save gradient log
+        self.save_gradient_log()
         
     def log_episode(self, episode: int, prompt: str, individual_rewards: list, 
                    avg_reward: float, best_reward: float):
@@ -150,7 +169,7 @@ class TrainingLogger:
             self.save_episode_log()
             self.last_save_episode = episode
         
-    def log_update(self, update_num: int, actor_loss: float, critic_loss: float, episode: int):
+    def log_update(self, update_num: int, actor_loss: float, critic_loss: float, episode: int, gradient_info: dict = None):
         """Log PPO update data"""
         loss_entry = {
             'update': update_num,
@@ -161,6 +180,10 @@ class TrainingLogger:
         }
         
         self.loss_data.append(loss_entry)
+        
+        # Log gradient information if provided
+        if gradient_info:
+            self.log_gradient_info(update_num, episode, gradient_info)
         
         # Update metadata
         self.metadata['total_updates'] = update_num
@@ -206,6 +229,16 @@ class TrainingLogger:
                 df.to_csv(self.loss_csv, index=False)
         except Exception as e:
             print(f"⚠️ Error saving loss log: {e}")
+    
+    def save_gradient_log(self):
+        """Save gradient data to CSV"""
+        try:
+            if self.gradient_data:
+                df = pd.DataFrame(self.gradient_data)
+                df.to_csv(self.gradient_csv, index=False)
+                print(f"💾 Gradient log saved: {len(self.gradient_data)} entries")
+        except Exception as e:
+            print(f"⚠️ Error saving gradient log: {e}")
 
     def save_metadata(self):
         """Save training metadata"""
@@ -228,6 +261,7 @@ class TrainingLogger:
         
         self.save_episode_log()
         self.save_loss_log()
+        self.save_gradient_log()
         self.save_metadata()
         self.save_value_predictions()
         self.save_returns()
@@ -297,10 +331,10 @@ def log_episode(episode: int, prompt: str, individual_rewards: list,
     if _logger:
         _logger.log_episode(episode, prompt, individual_rewards, avg_reward, best_reward)
 
-def log_update(update_num: int, actor_loss: float, critic_loss: float, episode: int):
+def log_update(update_num: int, actor_loss: float, critic_loss: float, episode: int, gradient_info: dict = None):
     """Log update data (convenient wrapper)"""
     if _logger:
-        _logger.log_update(update_num, actor_loss, critic_loss, episode)
+        _logger.log_update(update_num, actor_loss, critic_loss, episode, gradient_info)
 
 def finalize_logging():
     """Complete logging and save final files"""

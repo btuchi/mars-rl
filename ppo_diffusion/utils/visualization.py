@@ -169,12 +169,14 @@ def plot_from_csv(training_timestamp: str, category: str = DEFAULT_CATEGORY):
     losses_df = data.get('losses')
     value_predictions_df = data.get('value_predictions')
     returns_df = data.get('returns')
+    gradients_df = data.get('gradients')
     
     if episodes_df is None:
         print("❌ No episode data to plot")
         return
     
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    # Create 2x3 subplot layout to include gradients
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     
     # Episode rewards
     axes[0, 0].plot(episodes_df['episode'], episodes_df['avg_reward'], alpha=0.6, label='Avg Reward')
@@ -187,13 +189,29 @@ def plot_from_csv(training_timestamp: str, category: str = DEFAULT_CATEGORY):
     
     # Loss curves (if available)
     if losses_df is not None:
-        axes[0, 1].plot(losses_df['update'], losses_df['actor_loss'], label='Actor Loss')
-        axes[0, 1].plot(losses_df['update'], losses_df['critic_loss'], label='Critic Loss')
-        axes[0, 1].set_title('Loss Curves')
-        axes[0, 1].set_xlabel('Update')
-        axes[0, 1].set_ylabel('Loss')
-        axes[0, 1].legend()
-        axes[0, 1].grid(True, alpha=0.3)
+        # Use separate y-axes for actor and critic loss due to scale differences
+        ax1 = axes[0, 1]
+        ax2 = ax1.twinx()
+        
+        # Actor loss (primary y-axis, often large)
+        line1 = ax1.plot(losses_df['update'], losses_df['actor_loss'], 'b-', label='Actor Loss')
+        ax1.set_xlabel('Update')
+        ax1.set_ylabel('Actor Loss', color='b')
+        ax1.tick_params(axis='y', labelcolor='b')
+        ax1.set_yscale('symlog')  # Symmetric log scale to handle negative values
+        
+        # Critic loss (secondary y-axis, often small)  
+        line2 = ax2.plot(losses_df['update'], losses_df['critic_loss'], 'r-', label='Critic Loss')
+        ax2.set_ylabel('Critic Loss', color='r')
+        ax2.tick_params(axis='y', labelcolor='r')
+        
+        # Combined legend
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax1.legend(lines, labels, loc='upper left')
+        
+        ax1.set_title('Loss Curves (Dual Scale)')
+        ax1.grid(True, alpha=0.3)
     else:
         axes[0, 1].text(0.5, 0.5, 'No Loss Data', ha='center', va='center', transform=axes[0, 1].transAxes)
         axes[0, 1].set_title('Loss Curves')
@@ -215,29 +233,100 @@ def plot_from_csv(training_timestamp: str, category: str = DEFAULT_CATEGORY):
         return_values = returns_df['return_value'].iloc[:min_len]
         
         # Create scatter plot
-        axes[1, 1].scatter(pred_values, return_values, alpha=0.6, s=10)
+        axes[1, 0].scatter(pred_values, return_values, alpha=0.6, s=10)
         
         # Add perfect prediction line
         all_values = list(pred_values) + list(return_values)
         min_val, max_val = min(all_values), max(all_values)
-        axes[1, 1].plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
-        
+        axes[1, 0].plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+        1
         # Calculate and display correlation
         correlation = pred_values.corr(return_values)
-        axes[1, 1].text(0.02, 0.98, f"Correlation: {correlation:.3f}", 
-                        transform=axes[1, 1].transAxes, fontsize=9,
+        axes[1, 0].text(0.02, 0.98, f"Correlation: {correlation:.3f}", 
+                        transform=axes[1, 0].transAxes, fontsize=9,
                         verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         
-        axes[1, 1].set_title('Value Predictions vs Returns')
-        axes[1, 1].set_xlabel('Predicted V(prompt)')
-        axes[1, 1].set_ylabel('Actual Return')
-        axes[1, 1].legend()
-        axes[1, 1].grid(True, alpha=0.3)
+        axes[1, 0].set_title('Value Predictions vs Returns')
+        axes[1, 0].set_xlabel('Predicted V(prompt)')
+        axes[1, 0].set_ylabel('Actual Return')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
             
         print(f"📊 Plotted {min_len} value prediction vs return pairs")
     else:
-        axes[1, 1].text(0.5, 0.5, 'No matching data found', ha='center', va='center', transform=axes[1, 1].transAxes)
-        axes[1, 1].set_title('Value Predictions vs Returns')
+        axes[1, 0].text(0.5, 0.5, 'No matching data found', ha='center', va='center', transform=axes[1, 0].transAxes)
+        axes[1, 0].set_title('Value Predictions vs Returns')
+    
+    # Gradient plots
+    if gradients_df is not None and len(gradients_df) > 0:
+        # Plot gradient norms over time
+        axes[0, 2].plot(gradients_df['update'], gradients_df['actor_grad_before'], 
+                       label='Actor Grad (Before Clip)', linewidth=2, marker='o', markersize=3)
+        axes[0, 2].plot(gradients_df['update'], gradients_df['actor_grad_after'], 
+                       label='Actor Grad (After Clip)', linewidth=2, marker='s', markersize=3)
+        axes[0, 2].plot(gradients_df['update'], gradients_df['critic_grad'], 
+                       label='Critic Grad', linewidth=2, marker='^', markersize=3)
+        axes[0, 2].set_title('Gradient Norms')
+        axes[0, 2].set_xlabel('Update')
+        axes[0, 2].set_ylabel('Gradient Norm')
+        axes[0, 2].legend()
+        axes[0, 2].grid(True, alpha=0.3)
+        axes[0, 2].set_yscale('log')  # Log scale for better visualization
+        
+        # Plot gradient clipping frequency
+        clipping_rate = gradients_df['grad_clipped'].rolling(window=10, min_periods=1).mean()
+        axes[1, 1].plot(gradients_df['update'], clipping_rate * 100, 
+                       linewidth=2, color='red', label='Clipping Rate (%)')
+        axes[1, 1].set_title('Gradient Clipping Rate (10-update rolling avg)')
+        axes[1, 1].set_xlabel('Update')
+        axes[1, 1].set_ylabel('Clipping Rate (%)')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+        axes[1, 1].set_ylim(0, 100)
+        
+        # Add statistics text
+        total_clipped = gradients_df['grad_clipped'].sum()
+        total_updates = len(gradients_df)
+        clip_percentage = (total_clipped / total_updates) * 100
+        axes[1, 1].text(0.02, 0.98, f"Overall: {clip_percentage:.1f}% clipped", 
+                        transform=axes[1, 1].transAxes, fontsize=9,
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        
+        print(f"📊 Plotted gradient data for {len(gradients_df)} updates")
+    else:
+        axes[0, 2].text(0.5, 0.5, 'No Gradient Data', ha='center', va='center', transform=axes[0, 2].transAxes)
+        axes[0, 2].set_title('Gradient Norms')
+        axes[1, 1].text(0.5, 0.5, 'No Gradient Data', ha='center', va='center', transform=axes[1, 1].transAxes)
+        axes[1, 1].set_title('Gradient Clipping Rate')
+    
+    # Gradient vs Loss correlation (if both available)
+    if gradients_df is not None and losses_df is not None and len(gradients_df) > 0 and len(losses_df) > 0:
+        # Merge on update number
+        merged_df = pd.merge(gradients_df, losses_df, on='update', how='inner')
+        if len(merged_df) > 0:
+            axes[1, 2].scatter(merged_df['actor_grad_before'], merged_df['actor_loss'], 
+                             alpha=0.6, s=20, label='Before Clipping')
+            axes[1, 2].scatter(merged_df['actor_grad_after'], merged_df['actor_loss'], 
+                             alpha=0.6, s=20, label='After Clipping')
+            axes[1, 2].set_title('Gradient vs Loss Correlation')
+            axes[1, 2].set_xlabel('Gradient Norm')
+            axes[1, 2].set_ylabel('Actor Loss')
+            axes[1, 2].legend()
+            axes[1, 2].grid(True, alpha=0.3)
+            axes[1, 2].set_xscale('log')
+            
+            # Calculate correlation
+            corr_before = merged_df['actor_grad_before'].corr(merged_df['actor_loss'])
+            corr_after = merged_df['actor_grad_after'].corr(merged_df['actor_loss'])
+            axes[1, 2].text(0.02, 0.98, f"Corr (before): {corr_before:.3f}\nCorr (after): {corr_after:.3f}", 
+                           transform=axes[1, 2].transAxes, fontsize=8,
+                           verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            axes[1, 2].text(0.5, 0.5, 'No matching gradient/loss data', ha='center', va='center', transform=axes[1, 2].transAxes)
+            axes[1, 2].set_title('Gradient vs Loss Correlation')
+    else:
+        axes[1, 2].text(0.5, 0.5, 'No Gradient or Loss Data', ha='center', va='center', transform=axes[1, 2].transAxes)
+        axes[1, 2].set_title('Gradient vs Loss Correlation')
     
     plt.tight_layout()
     
@@ -289,6 +378,12 @@ def load_training_data(training_timestamp: str, category: str = DEFAULT_CATEGORY
         if returns_csv.exists():
             data['returns'] = pd.read_csv(returns_csv)
             print(f"📊 Loaded {len(data['returns'])} returns")
+        
+        # Load gradients
+        gradient_csv = logs_dir / "gradient_log.csv"
+        if gradient_csv.exists():
+            data['gradients'] = pd.read_csv(gradient_csv)
+            print(f"📊 Loaded {len(data['gradients'])} gradient entries")
         
         return data
         

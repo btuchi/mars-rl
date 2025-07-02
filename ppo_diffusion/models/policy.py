@@ -10,22 +10,46 @@ class LatentDiversityPolicy(nn.Module):
     Input: Text features from prompt
     Output: Latent space modifications
     """
-    def __init__(self, text_dim=512, latent_dim=4, latent_size=64):
+    def __init__(self, text_dim=768, latent_dim=4, latent_size=64):
         super(LatentDiversityPolicy, self).__init__()
         
+        # self.policy_net = nn.Sequential(
+        #     nn.Linear(text_dim, 512),
+        #     nn.GELU(),
+        #     nn.Dropout(0.1),
+        #     nn.Linear(512, 256),
+        #     nn.GELU(),
+        #     nn.Dropout(0.1),
+        #     nn.Linear(256, latent_dim * latent_size * latent_size),  # 4*64*64 = 16384
+        #     nn.Tanh()  # Bounded output [-1, +1]
+        # )
+
         self.policy_net = nn.Sequential(
-            nn.Linear(text_dim, 512),
+            nn.Linear(text_dim, 1024),  # Bigger!
             nn.GELU(),
             nn.Dropout(0.1),
-            nn.Linear(512, 256),
+            nn.Linear(1024, 512),       # More capacity
             nn.GELU(),
             nn.Dropout(0.1),
-            nn.Linear(256, latent_dim * latent_size * latent_size),  # 4*64*64 = 16384
-            nn.Tanh()  # Bounded output [-1, +1]
+            nn.Linear(512, latent_dim * latent_size * latent_size),
+            nn.Tanh()
         )
+
         
-        self.modification_scale = 0.5  # How much to modify latents
+        self.modification_scale = 0.5  # How much to modify latents (reduced for stability)
         
+        # Initialize weights properly for stability
+        self._initialize_weights()
+    
+    def _initialize_weights(self):
+        """Initialize network weights for stable training"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                # Xavier normal with small gain for stability
+                nn.init.xavier_normal_(m.weight, gain=0.1)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+                    
     def forward(self, text_features):
         """
         Args:

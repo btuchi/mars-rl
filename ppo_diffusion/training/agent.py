@@ -194,19 +194,21 @@ class DiffusionPPOAgent:
 
             trajectory, log_prob_tensor = self.actor.select_trajectory(prompt)
 
-            # Store and then immediately clear the trajectory's computation graph
+            # Store log prob value for memory buffer, but keep gradient connection
             log_prob_value = log_prob_tensor.item()
-            log_prob_detached = log_prob_tensor.detach()
 
-            # Clear the trajectory's gradient connection after storing what we need
+            # Keep gradient connection intact for policy training
+            # Note: We need gradients to flow back to the diversity policy
             if hasattr(trajectory, 'total_log_prob') and trajectory.total_log_prob is not None:
-                trajectory.total_log_prob = trajectory.total_log_prob.detach().requires_grad_(True)
+                # Keep the gradient connection for policy learning
+                pass
             elif hasattr(trajectory, 'policy_log_prob') and trajectory.policy_log_prob is not None:
-                trajectory.policy_log_prob = trajectory.policy_log_prob.detach().requires_grad_(True)
+                # Keep the gradient connection for policy learning  
+                pass
 
             trajectories.append(trajectory)
             log_probs.append(log_prob_value)
-            log_prob_tensors.append(log_prob_detached.requires_grad_(True))
+            log_prob_tensors.append(log_prob_tensor)  # Keep gradient connection intact
             
             print(f"  Image {i+1}/{self.images_per_prompt} generated")
 
@@ -233,7 +235,7 @@ class DiffusionPPOAgent:
                     if hasattr(step, 'noise_pred'):
                         step.noise_pred = None
             
-            del trajectory, log_prob_tensor
+            # Note: Keep trajectory and log_prob_tensor in memory for gradient flow
             clear_gpu_cache()
         
         # Calculate individual diversity rewards
@@ -242,6 +244,13 @@ class DiffusionPPOAgent:
         
         print(f"  Individual rewards: {individual_rewards}")
         print(f"  Average reward: {avg_reward:.4f}")
+        
+        # Diagnostic: Check reward signal quality
+        reward_std = np.std(individual_rewards)
+        reward_range = np.max(individual_rewards) - np.min(individual_rewards)
+        print(f"  🔍 Reward std: {reward_std:.6f}, range: {reward_range:.6f}")
+        if reward_std < 0.01:
+            print("  ⚠️ WARNING: Very low reward variance - weak learning signal!")
 
         # Log episode information
         if episode is not None:
@@ -347,8 +356,8 @@ class DiffusionPPOAgent:
                 old_log_probs_batch = torch.tensor([memo_log_probs[idx] for idx in batch], 
                                           dtype=self.dtype, device=self.device)
     
-                # Calculate ratio
-                ratio = torch.exp(current_log_probs_tensor - old_log_probs_batch)
+                # Calculate ratio (clamped)
+                ratio = torch.exp(torch.clamp(current_log_probs_tensor - old_log_probs_batch, -2, 2))
 
                 # Analyze the ratio distribution
                 ratio_mean = ratio.mean().item()
@@ -357,25 +366,29 @@ class DiffusionPPOAgent:
                 
                 print(f"🔍 Ratio stats: mean={ratio_mean:.3f}, min={ratio_min:.3f}, max={ratio_max:.3f}")
                 
-                # # Check if we're hitting PPO clipping frequently
-                # clipped_ratios = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP)
-                # clipping_rate = (ratio != clipped_ratios).float().mean().item()
-                
-                # print(f"🔍 PPO clipping rate: {clipping_rate:.2%}")
-                
-                # if clipping_rate > 0.5:
-                #     print("⚠️ High clipping rate - policy changing too fast!")
-                
-                # Batch advantages
+                # Batch advantages with normalization
                 batch_advantages = memo_advantages_tensor[batch]
-                print("Batch advantages mean:", batch_advantages.mean().item())
+                
+                # Normalize advantages to improve training stability
+                if len(batch_advantages) > 1:
+                    advantage_mean = batch_advantages.mean()
+                    advantage_std = batch_advantages.std()
+                    if advantage_std > 1e-8:  # Avoid division by zero
+                        batch_advantages = (batch_advantages - advantage_mean) / (advantage_std + 1e-8)
+                        print(f"🔍 Advantages normalized: mean={advantage_mean:.4f}, std={advantage_std:.4f}")
+                    else:
+                        print(f"🔍 Advantages not normalized (std too small): mean={advantage_mean:.4f}, std={advantage_std:.4f}")
+                else:
+                    print(f"🔍 Single advantage, no normalization: {batch_advantages.item():.4f}")
+                
+                print("Batch advantages (after norm) mean:", batch_advantages.mean().item())
                 
                 # PPO clipped objective
                 surr1 = ratio * batch_advantages
                 surr2 = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP) * batch_advantages
 
-                # print("surr1 mean:", surr1.mean().item())
-                # print("surr2 mean:", surr2.mean().item())
+                print("surr1 mean:", surr1.mean().item())
+                print("surr2 mean:", surr2.mean().item())
                 
                 # Actor loss
                 actor_loss = -torch.min(surr1, surr2).mean()
@@ -401,16 +414,24 @@ class DiffusionPPOAgent:
 
                 actor_loss.backward()
 
-                # total_grad_norm = 0
-                # param_count = 0
-                # for param in self.actor.unet.parameters():
-                #     if param.grad is not None:
-                #         total_grad_norm += param.grad.norm().item()
-                #         param_count += 1
-                # print(f"Total gradient norm: {total_grad_norm}, Params with gradients: {param_count}")
+                # Calculate gradient norm BEFORE clipping
+                actor_grad_norm_before = 0
+                for param in self.actor.diversity_policy.parameters():
+                    if param.grad is not None:
+                        actor_grad_norm_before += param.grad.data.norm(2).item() ** 2
+                actor_grad_norm_before = actor_grad_norm_before ** 0.5
 
                 # Handle gradient clipping for diversity policy (not UNet)
                 torch.nn.utils.clip_grad_norm_(self.actor.diversity_policy.parameters(), max_norm=0.5)
+
+                # Calculate gradient norm AFTER clipping  
+                actor_grad_norm_after = 0
+                for param in self.actor.diversity_policy.parameters():
+                    if param.grad is not None:
+                        actor_grad_norm_after += param.grad.data.norm(2).item() ** 2
+                actor_grad_norm_after = actor_grad_norm_after ** 0.5
+
+                print(f"🔍 Actor gradient norm: {actor_grad_norm_before:.6f} → {actor_grad_norm_after:.6f} (clipped: {actor_grad_norm_before > 1.0})")
                 
                 self.actor_optimizer.step()
 
@@ -426,18 +447,13 @@ class DiffusionPPOAgent:
                 total_norm = total_norm ** (1. / 2)
                 print(f"🔍 Critic gradient norm: {total_norm:.6f}")
 
-                actor_grad_norm = 0
-                for param in self.actor.diversity_policy.parameters():
-                    if param.grad is not None:
-                        actor_grad_norm += param.grad.data.norm(2).item() ** 2
-                actor_grad_norm = actor_grad_norm ** 0.5
-                print(f"🔍 Actor (diversity policy) gradient norm: {actor_grad_norm:.6f}")
 
                 torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
                 self.critic_optimizer.step()
 
                 # Clear gradients and memory after each batch
-                del current_log_probs, fresh_trajectory, fresh_log_prob
+                # Note: Keep fresh_trajectory and fresh_log_prob alive for gradient flow
+                del current_log_probs
                 clear_gpu_cache()
                     
         # Return losses for logging
@@ -452,7 +468,15 @@ class DiffusionPPOAgent:
             # Clear buffer
             self.replay_buffer.clear_memo()
             
-            return avg_actor_loss, avg_critic_loss, memo_values, memo_returns
+            # Return additional gradient info for logging (you can enhance this)
+            gradient_info = {
+                'actor_grad_before': actor_grad_norm_before,
+                'actor_grad_after': actor_grad_norm_after, 
+                'critic_grad': total_norm,
+                'grad_clipped': actor_grad_norm_before > 1.0
+            }
+            
+            return avg_actor_loss, avg_critic_loss, memo_values, memo_returns, gradient_info
         
         # Clear buffer even if no losses
         self.replay_buffer.clear_memo()
@@ -469,7 +493,7 @@ class DiffusionPPOAgent:
         # # Emergency reset if weights explode
         # if max_weight > 100.0 or torch.isnan(torch.tensor(max_weight)):
         #     print("🚨 UNet weights exploded! Consider resetting or lower LR")
-        return None, None, None, None
+        return None, None, None, None, None
     
     def save_policy(self):
         """Save the trained diversity policy"""
