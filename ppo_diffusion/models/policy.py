@@ -24,19 +24,27 @@ class LatentDiversityPolicy(nn.Module):
         #     nn.Tanh()  # Bounded output [-1, +1]
         # )
 
-        self.policy_net = nn.Sequential(
-            nn.Linear(text_dim, 1024),  # Bigger!
+        # Separate networks for mean and log_std for proper probability modeling
+        self.mean_net = nn.Sequential(
+            nn.Linear(text_dim, 1024),
             nn.GELU(),
             nn.Dropout(0.1),
-            nn.Linear(1024, 512),       # More capacity
+            nn.Linear(1024, 512),
             nn.GELU(),
             nn.Dropout(0.1),
             nn.Linear(512, latent_dim * latent_size * latent_size),
             nn.Tanh()
         )
+        
+        # Log standard deviation (learned parameter)
+        self.log_std = nn.Parameter(torch.zeros(latent_dim * latent_size * latent_size) - 1.0)  # Start with small std
 
         
         self.modification_scale = 0.5  # How much to modify latents (reduced for stability)
+        
+        # Gradient scaling parameters for better gradient-loss correlation
+        # self.gradient_scale = nn.Parameter(torch.tensor(1.0))  # Learnable gradient scaling
+        # self.target_grad_norm = 1e-3  # Target gradient magnitude
         
         # Initialize weights properly for stability
         self._initialize_weights()
@@ -56,15 +64,47 @@ class LatentDiversityPolicy(nn.Module):
             text_features: [batch_size, 768] Stable Diffusion text features
         Returns:
             latent_modification: [batch_size, 4, 64, 64] modification to add to initial latents
+            log_prob: log probability of the sampled modification
         """
         batch_size = text_features.shape[0]
         
-        # Generate latent modification
-        latent_mod = self.policy_net(text_features)
-        latent_mod = latent_mod.reshape(batch_size, 4, 64, 64)
+        # Generate mean of latent modification
+        latent_mean = self.mean_net(text_features)
+        latent_mean = latent_mean.reshape(batch_size, 4, 64, 64)
+        
+        # Get standard deviation (expand to match batch size)
+        std = torch.exp(self.log_std).reshape(1, 4, 64, 64).expand_as(latent_mean)
+        
+        # Sample modification from learned distribution
+        if self.training:
+            # During training, sample from the distribution
+            eps = torch.randn_like(latent_mean)
+            latent_modification = latent_mean + std * eps
+        else:
+            # During inference, use the mean
+            latent_modification = latent_mean
+        
+        # Calculate log probability of the sampled modification
+        log_prob = self._calculate_log_prob(latent_modification, latent_mean, std)
+        # log_prob = -0.5 * torch.sum(latent_modification ** 2)
         
         # Scale the modification to be small
-        return latent_mod * self.modification_scale
+        scaled_modification = latent_modification * self.modification_scale
+        
+        return scaled_modification, log_prob
+    
+    def _calculate_log_prob(self, sample, mean, std):
+        """Calculate log probability of sample under Gaussian distribution with gradient scaling"""
+        # Gaussian log probability: -0.5 * ((x - μ) / σ)² - log(σ) - 0.5*log(2π)
+        log_2pi = torch.log(torch.tensor(2 * torch.pi, device=sample.device, dtype=sample.dtype))
+        log_prob = -0.5 * torch.mean(((sample - mean) / std) ** 2) \
+                   - torch.mean(torch.log(std)) \
+                   - 0.5 * log_2pi
+        
+        # Apply gradient scaling for better gradient-loss correlation
+        # scaled_log_prob = log_prob * self.gradient_scale
+        
+        return log_prob
 
 class DiffusionPolicyNetwork(nn.Module):
     """
@@ -79,7 +119,6 @@ class DiffusionPolicyNetwork(nn.Module):
     def __init__(self, sampler, num_inference_steps: int = 20):
         super(DiffusionPolicyNetwork, self).__init__()
         self.sampler = sampler
-        # TODO: ResNet? VGG16?
         self.unet = sampler.unet  # This is our "policy network"
         self.num_inference_steps = num_inference_steps
 
@@ -144,11 +183,11 @@ class DiffusionPolicyNetwork(nn.Module):
         #     return torch.stack(log_probs).sum()
 
         # MODIFIED: for diversity policy network
-        if hasattr(trajectory, 'policy_log_prob'):
-            return trajectory.policy_log_prob
-        else:
-            # Fallback to simple calculation
-            return torch.tensor(0.0, requires_grad=True, device=self.sampler.device)
+        # if hasattr(trajectory, 'policy_log_prob'):
+        return trajectory.policy_log_prob
+        # else:
+        #     # Fallback to simple calculation
+        #     return torch.tensor(0.0, requires_grad=True, device=self.sampler.device)
     
     def select_trajectory(self, prompt: str) -> Tuple:
         """

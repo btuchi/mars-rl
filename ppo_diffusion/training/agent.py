@@ -350,9 +350,11 @@ class DiffusionPPOAgent:
 
                     # Generate FRESH trajectory with current policy
                     fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
+                    print(f"🔍 DEBUG: fresh_log_prob requires_grad={fresh_log_prob.requires_grad}, value={fresh_log_prob.item():.6f}")
                     current_log_probs.append(fresh_log_prob)
 
                 current_log_probs_tensor = torch.stack(current_log_probs)
+                print(f"🔍 DEBUG: current_log_probs_tensor requires_grad={current_log_probs_tensor.requires_grad}, shape={current_log_probs_tensor.shape}")
                 old_log_probs_batch = torch.tensor([memo_log_probs[idx] for idx in batch], 
                                           dtype=self.dtype, device=self.device)
     
@@ -392,6 +394,7 @@ class DiffusionPPOAgent:
                 
                 # Actor loss
                 actor_loss = -torch.min(surr1, surr2).mean()
+                print(f"🔍 DEBUG: actor_loss requires_grad={actor_loss.requires_grad}, value={actor_loss.item():.6f}")
                 
                 # Critic loss
                 batch_values = self.critic(memo_features_tensor[batch]).squeeze()
@@ -414,12 +417,37 @@ class DiffusionPPOAgent:
 
                 actor_loss.backward()
 
+                # DEBUG: Check individual parameter gradients
+                # print("🔍 DEBUG: Checking individual parameter gradients:")
+                # param_count = 0
+                # for name, param in self.actor.diversity_policy.named_parameters():
+                #     if param.grad is not None:
+                #         grad_norm = param.grad.data.norm(2).item()
+                #         print(f"  {name}: grad_norm={grad_norm:.8f}, requires_grad={param.requires_grad}")
+                #         param_count += 1
+                #     else:
+                #         print(f"  {name}: grad=None, requires_grad={param.requires_grad}")
+                # print(f"🔍 DEBUG: Total parameters with gradients: {param_count}")
+
                 # Calculate gradient norm BEFORE clipping
                 actor_grad_norm_before = 0
                 for param in self.actor.diversity_policy.parameters():
                     if param.grad is not None:
                         actor_grad_norm_before += param.grad.data.norm(2).item() ** 2
                 actor_grad_norm_before = actor_grad_norm_before ** 0.5
+                
+                # Adaptive gradient scaling for better gradient-loss correlation
+                # target_grad_norm = self.actor.diversity_policy.target_grad_norm
+                # if actor_grad_norm_before > 0:
+                #     # Adjust gradient scale to reach target magnitude
+                #     scale_adjustment = target_grad_norm / actor_grad_norm_before
+                #     with torch.no_grad():
+                #         # Smoothly adjust the gradient scale (exponential moving average)
+                #         self.actor.diversity_policy.gradient_scale.data = (
+                #             0.9 * self.actor.diversity_policy.gradient_scale.data + 
+                #             0.1 * scale_adjustment
+                #         )
+                #     print(f"🔍 Gradient scale updated: {self.actor.diversity_policy.gradient_scale.item():.4f} (target_norm={target_grad_norm:.6f}, actual_norm={actor_grad_norm_before:.6f})")
 
                 # Handle gradient clipping for diversity policy (not UNet)
                 torch.nn.utils.clip_grad_norm_(self.actor.diversity_policy.parameters(), max_norm=0.5)

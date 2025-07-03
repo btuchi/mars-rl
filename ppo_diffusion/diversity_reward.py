@@ -18,7 +18,7 @@ def calculate_mmd_reward(generated_features, reference_features, gamma=None):
     mmd_XY = np.sum(K_XY) / (m * n)
     
     mmd = mmd_XX + mmd_YY - 2 * mmd_XY
-    return np.exp(-5.0 * mmd)
+    return np.exp(-0.5 * mmd)
 
 def calculate_individual_diversity_rewards(generated_features, reference_features, gamma=None):
     """
@@ -77,7 +77,7 @@ def calculate_individual_diversity_rewards(generated_features, reference_feature
     gen_gen_term = gen_gen_sum / (M * (M - 1))
     gen_ref_term = np.sum(K_GR) / (M * N)
     overall_mmd = gen_gen_term + ref_ref_term - 2 * gen_ref_term
-    overall_reward = np.exp(-5.0 * overall_mmd)
+    overall_reward = np.exp(-0.5 * overall_mmd)
     
     # Calculate individual rewards efficiently using vectorized operations
     individual_rewards = []
@@ -98,7 +98,7 @@ def calculate_individual_diversity_rewards(generated_features, reference_feature
         
         # Calculate MMD without image i
         mmd_without_i = gen_gen_term_without_i + ref_ref_term - 2 * gen_ref_term_without_i
-        reward_without_i = np.exp(-5.0 * mmd_without_i)
+        reward_without_i = np.exp(-0.5 * mmd_without_i)
         
         # Individual contribution
         marginal_contribution = overall_reward - reward_without_i

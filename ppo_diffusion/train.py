@@ -10,10 +10,9 @@ import traceback
 from .core.trajectory import DiffusionSampler
 from .training.agent import DiffusionPPOAgent
 from .utils.device import setup_h100_optimizations, get_device_info, clear_gpu_cache
-from .utils.logging import initialize_logger, log_episode, log_update, finalize_logging, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG
+from .utils.logging import initialize_logger, log_episode, log_update, finalize_logging, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG, VALUE_PREDICTION_LOG, RETURN_LOG
 from .utils.visualization import plot_diffusion_training, plot_from_csv
 from .utils.constants import *
-
 
 def main(category: str = DEFAULT_CATEGORY):
     """Main training loop with robust CSV logging"""
@@ -193,8 +192,7 @@ def main(category: str = DEFAULT_CATEGORY):
         print(f"Best reward achieved: {best_reward:.4f}")
         print(f"Total PPO updates: {len(ACTOR_LOSS_LOG)}")
 
-        # Plot training results (if not interrupted)
-        from utils.logging import VALUE_PREDICTION_LOG, RETURN_LOG
+        
         plot_diffusion_training(
             reward_buffer, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG,
             VALUE_PREDICTION_LOG, RETURN_LOG, DEFAULT_NUM_EPISODES-1, 

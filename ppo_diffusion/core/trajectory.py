@@ -254,10 +254,8 @@ class DiffusionSampler:
         # Get policy modification
         with torch.enable_grad():  # Enable gradients for policy network
             policy_network.train()  # Make sure policy is in train mode
-            latent_modification = policy_network(text_features)
+            latent_modification, policy_log_prob = policy_network(text_features)
             
-            # Calculate simple log probability for the modification
-            policy_log_prob = -0.5 * torch.sum(latent_modification ** 2)  # Gaussian prior
         
         # Apply modification
         modified_latents = base_latents + latent_modification

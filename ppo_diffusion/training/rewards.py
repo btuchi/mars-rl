@@ -90,8 +90,10 @@ class DiffusionRewardFunction:
                 print(f"  ✅ Image {i}: diversity_score={diversity_reward:.3f}")
             
             hybrid_rewards.append(final_reward)
+
+            normalized_rewards = self.normalize_batch_rewards(np.array(hybrid_rewards))
         
-        return self.normalize_batch_rewards(np.array(hybrid_rewards))
+        return np.array(hybrid_rewards)
     
     def normalize_reward(self, reward: float) -> float:
         """Normalize reward based on running statistics"""
@@ -132,5 +134,10 @@ class DiffusionRewardFunction:
         
         # Optional: clip extreme values to prevent PPO instability
         normalized_rewards = np.clip(normalized_rewards, -5.0, 5.0)
+        
+        # DEBUG: Print raw vs normalized rewards to check if normalization is masking progress
+        print(f"🔍 RAW rewards: [{rewards.min():.6f}, {rewards.max():.6f}], mean={rewards.mean():.6f}")
+        print(f"🔍 NORMALIZED rewards: [{normalized_rewards.min():.6f}, {normalized_rewards.max():.6f}], mean={normalized_rewards.mean():.6f}")
+        print(f"🔍 Running mean={mean_reward:.6f}, std={std_reward:.6f}")
         
         return normalized_rewards
