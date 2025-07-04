@@ -21,6 +21,7 @@ from .memory import DiffusionReplayMemory
 from .rewards import DiffusionRewardFunction
 from ..utils.device import clear_gpu_cache
 from ..utils.constants import *
+from ..utils.logging import log_log_probability
 
 
 class DiffusionPPOAgent:
@@ -66,7 +67,7 @@ class DiffusionPPOAgent:
             lr=self.LR_ACTOR,
             weight_decay=1e-4
         )
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.LR_CRITIC)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.LR_CRITIC, weight_decay=1e-3)
         print(f"🎯 Only training {sum(p.numel() for p in self.actor.diversity_policy.parameters())} policy parameters")
         
         # Components
@@ -196,6 +197,9 @@ class DiffusionPPOAgent:
 
             # Store log prob value for memory buffer, but keep gradient connection
             log_prob_value = log_prob_tensor.item()
+            
+            # Log the log probability for monitoring
+            log_log_probability(log_prob_value, episode if episode is not None else 0, i)
 
             # Keep gradient connection intact for policy training
             # Note: We need gradients to flow back to the diversity policy
@@ -210,7 +214,7 @@ class DiffusionPPOAgent:
             log_probs.append(log_prob_value)
             log_prob_tensors.append(log_prob_tensor)  # Keep gradient connection intact
             
-            print(f"  Image {i+1}/{self.images_per_prompt} generated")
+            print(f"  Image {i+1}/{self.images_per_prompt} generated (log_prob: {log_prob_value:.6f})")
 
             # Save sample image if needed
             if should_save and i == 0:  # Save first image of batch
@@ -271,20 +275,10 @@ class DiffusionPPOAgent:
         return trajectories, individual_rewards, avg_reward, prompt_features
 
     def compute_gae(self, rewards, values):
-        """GAE computation for diffusion models"""
-        advantages = []
-        gae = 0
-        
-        # For diffusion, each trajectory is independent, so simplified GAE
-        for step in reversed(range(len(rewards))):
-            next_value = 0  # Always terminal
-            next_non_terminal = 0  # Always terminal
-            
-            delta = rewards[step] + self.GAMMA * next_value * next_non_terminal - values[step]
-            gae = delta + self.GAMMA * self.LAMBDA * next_non_terminal * gae
-            advantages.insert(0, gae)
-        
-        return np.array(advantages)
+        """Simplified advantage computation for episodic tasks"""
+        # For episodic tasks, advantage is simply reward - value
+        advantages = rewards - values
+        return advantages
 
     def update(self):
         """PPO update for diffusion models"""
@@ -297,12 +291,6 @@ class DiffusionPPOAgent:
         clear_gpu_cache()
 
         # Copy current actor to old_actor
-        # if hasattr(self.actor.unet, 'module') and hasattr(self.old_actor.unet, 'module'):
-        #     self.old_actor.unet.module.load_state_dict(self.actor.unet.module.state_dict())
-        # elif hasattr(self.actor.unet, 'module'):
-        #     self.old_actor.unet.load_state_dict(self.actor.unet.module.state_dict())
-        # else:
-        #     self.old_actor.unet.load_state_dict(self.actor.unet.state_dict())
         self.old_actor.diversity_policy.load_state_dict(self.actor.diversity_policy.state_dict())
         
         # Get trajectory data

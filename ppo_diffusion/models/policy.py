@@ -27,10 +27,12 @@ class LatentDiversityPolicy(nn.Module):
         # Separate networks for mean and log_std for proper probability modeling
         self.mean_net = nn.Sequential(
             nn.Linear(text_dim, 1024),
-            nn.GELU(),
+            # nn.GELU(),
+            nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(1024, 512),
-            nn.GELU(),
+            # nn.GELU(),
+            nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(512, latent_dim * latent_size * latent_size),
             nn.Tanh()

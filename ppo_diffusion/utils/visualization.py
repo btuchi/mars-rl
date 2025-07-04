@@ -7,7 +7,7 @@ from pathlib import Path
 from .constants import DEFAULT_CATEGORY
 
 def plot_diffusion_training(reward_buffer, actor_loss_log, critic_loss_log, best_reward_log, 
-                          value_prediction_log, return_log, final_episode=None, 
+                          value_prediction_log, return_log, log_prob_log=None, final_episode=None, 
                           category=DEFAULT_CATEGORY, timestamp=None):
     """Plotting function adapted from vanilla PPO but for diffusion metrics"""
     
@@ -54,13 +54,39 @@ def plot_diffusion_training(reward_buffer, actor_loss_log, critic_loss_log, best
                       ha='center', va='center', transform=axs[0, 1].transAxes, fontsize=12)
         axs[0, 1].set_title("Loss per Update")
 
-    # Best Reward Progress
-    axs[0, 2].plot(episode_range, best_reward_log[:num_episodes], label="Best Diversity Reward", linewidth=2)
-    axs[0, 2].set_title("Best Diversity Reward Progress")
-    axs[0, 2].set_xlabel("Episode")
-    axs[0, 2].set_ylabel("Best Diversity Reward")
-    axs[0, 2].legend()
-    axs[0, 2].grid(True, alpha=0.3)
+    # Log Probability Progress (if available)
+    if log_prob_log and len(log_prob_log) > 0:
+        # Show log probability trend over time
+        log_prob_episodes = np.linspace(0, num_episodes, len(log_prob_log))
+        axs[0, 2].plot(log_prob_episodes, log_prob_log, label="Log Probability", alpha=0.6)
+        
+        # Add smoothed version if enough data
+        if len(log_prob_log) > 20:
+            window = 20
+            smoothed_log_prob = np.convolve(log_prob_log, np.ones(window)/window, mode='valid')
+            smoothed_episodes = np.linspace(window-1, num_episodes, len(smoothed_log_prob))
+            axs[0, 2].plot(smoothed_episodes, smoothed_log_prob, label="Smoothed Log Prob", linewidth=2)
+        
+        axs[0, 2].set_title("Log Probability Progress")
+        axs[0, 2].set_xlabel("Episode")
+        axs[0, 2].set_ylabel("Log Probability")
+        axs[0, 2].legend()
+        axs[0, 2].grid(True, alpha=0.3)
+        
+        # Add statistics
+        mean_log_prob = np.mean(log_prob_log)
+        std_log_prob = np.std(log_prob_log)
+        axs[0, 2].text(0.02, 0.98, f"Mean: {mean_log_prob:.3f}\nStd: {std_log_prob:.3f}", 
+                      transform=axs[0, 2].transAxes, fontsize=9,
+                      verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    else:
+        # Fallback to best reward progress
+        axs[0, 2].plot(episode_range, best_reward_log[:num_episodes], label="Best Diversity Reward", linewidth=2)
+        axs[0, 2].set_title("Best Diversity Reward Progress")
+        axs[0, 2].set_xlabel("Episode")
+        axs[0, 2].set_ylabel("Best Diversity Reward")
+        axs[0, 2].legend()
+        axs[0, 2].grid(True, alpha=0.3)
 
     # Value Predictions vs Returns
     if len(value_prediction_log) > 0 and len(return_log) > 0:
@@ -170,13 +196,14 @@ def plot_from_csv(training_timestamp: str, category: str = DEFAULT_CATEGORY):
     value_predictions_df = data.get('value_predictions')
     returns_df = data.get('returns')
     gradients_df = data.get('gradients')
+    log_prob_df = data.get('log_probabilities')
     
     if episodes_df is None:
         print("❌ No episode data to plot")
         return
     
-    # Create 2x3 subplot layout to include gradients
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    # Create 3x3 subplot layout to include log probabilities
+    fig, axes = plt.subplots(3, 3, figsize=(18, 15))
     
     # Episode rewards
     axes[0, 0].plot(episodes_df['episode'], episodes_df['avg_reward'], alpha=0.6, label='Avg Reward')
@@ -215,6 +242,36 @@ def plot_from_csv(training_timestamp: str, category: str = DEFAULT_CATEGORY):
     else:
         axes[0, 1].text(0.5, 0.5, 'No Loss Data', ha='center', va='center', transform=axes[0, 1].transAxes)
         axes[0, 1].set_title('Loss Curves')
+    
+    # Log probability plot over time
+    if log_prob_df is not None and len(log_prob_df) > 0:
+        # Group by episode and get mean log probability
+        episode_log_probs = log_prob_df.groupby('episode')['log_probability'].mean()
+        axes[0, 2].plot(episode_log_probs.index, episode_log_probs.values, 
+                       linewidth=2, alpha=0.7, label='Mean Log Probability')
+        
+        # Add smoothed version if enough data
+        if len(episode_log_probs) > 10:
+            window = min(20, len(episode_log_probs) // 4)
+            smoothed = episode_log_probs.rolling(window=window, center=True).mean()
+            axes[0, 2].plot(smoothed.index, smoothed.values, 
+                           linewidth=2, color='red', label=f'Smoothed (MA-{window})')
+        
+        axes[0, 2].set_title('Log Probability Over Time')
+        axes[0, 2].set_xlabel('Episode')
+        axes[0, 2].set_ylabel('Log Probability')
+        axes[0, 2].legend()
+        axes[0, 2].grid(True, alpha=0.3)
+        
+        # Add statistics
+        mean_log_prob = episode_log_probs.mean()
+        std_log_prob = episode_log_probs.std()
+        axes[0, 2].text(0.02, 0.98, f'Mean: {mean_log_prob:.3f}\nStd: {std_log_prob:.3f}', 
+                        transform=axes[0, 2].transAxes, fontsize=9,
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    else:
+        axes[0, 2].text(0.5, 0.5, 'No Log Probability Data', ha='center', va='center', transform=axes[0, 2].transAxes)
+        axes[0, 2].set_title('Log Probability Over Time')
     
     # Reward distribution
     axes[1, 0].hist(episodes_df['avg_reward'], bins=30, alpha=0.7, edgecolor='black')
@@ -273,31 +330,42 @@ def plot_from_csv(training_timestamp: str, category: str = DEFAULT_CATEGORY):
         axes[0, 2].grid(True, alpha=0.3)
         axes[0, 2].set_yscale('log')  # Log scale for better visualization
         
-        # Plot gradient clipping frequency
-        clipping_rate = gradients_df['grad_clipped'].rolling(window=10, min_periods=1).mean()
-        axes[1, 1].plot(gradients_df['update'], clipping_rate * 100, 
-                       linewidth=2, color='red', label='Clipping Rate (%)')
-        axes[1, 1].set_title('Gradient Clipping Rate (10-update rolling avg)')
-        axes[1, 1].set_xlabel('Update')
-        axes[1, 1].set_ylabel('Clipping Rate (%)')
-        axes[1, 1].legend()
-        axes[1, 1].grid(True, alpha=0.3)
-        axes[1, 1].set_ylim(0, 100)
-        
-        # Add statistics text
-        total_clipped = gradients_df['grad_clipped'].sum()
-        total_updates = len(gradients_df)
-        clip_percentage = (total_clipped / total_updates) * 100
-        axes[1, 1].text(0.02, 0.98, f"Overall: {clip_percentage:.1f}% clipped", 
-                        transform=axes[1, 1].transAxes, fontsize=9,
-                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        # Log probability plot over time (moved from [0,2] to [1,1])
+        if log_prob_df is not None and len(log_prob_df) > 0:
+            # Group by episode and get mean log probability
+            episode_log_probs = log_prob_df.groupby('episode')['log_probability'].mean()
+            axes[1, 1].plot(episode_log_probs.index, episode_log_probs.values, 
+                           linewidth=2, alpha=0.7, label='Mean Log Probability')
+            
+            # Add smoothed version if enough data
+            if len(episode_log_probs) > 10:
+                window = min(20, len(episode_log_probs) // 4)
+                smoothed = episode_log_probs.rolling(window=window, center=True).mean()
+                axes[1, 1].plot(smoothed.index, smoothed.values, 
+                               linewidth=2, color='red', label=f'Smoothed (MA-{window})')
+            
+            axes[1, 1].set_title('Log Probability Over Time')
+            axes[1, 1].set_xlabel('Episode')
+            axes[1, 1].set_ylabel('Log Probability')
+            axes[1, 1].legend()
+            axes[1, 1].grid(True, alpha=0.3)
+            
+            # Add statistics
+            mean_log_prob = episode_log_probs.mean()
+            std_log_prob = episode_log_probs.std()
+            axes[1, 1].text(0.02, 0.98, f'Mean: {mean_log_prob:.3f}\\nStd: {std_log_prob:.3f}', 
+                            transform=axes[1, 1].transAxes, fontsize=9,
+                            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            axes[1, 1].text(0.5, 0.5, 'No Log Probability Data', ha='center', va='center', transform=axes[1, 1].transAxes)
+            axes[1, 1].set_title('Log Probability Over Time')
         
         print(f"📊 Plotted gradient data for {len(gradients_df)} updates")
     else:
         axes[0, 2].text(0.5, 0.5, 'No Gradient Data', ha='center', va='center', transform=axes[0, 2].transAxes)
         axes[0, 2].set_title('Gradient Norms')
-        axes[1, 1].text(0.5, 0.5, 'No Gradient Data', ha='center', va='center', transform=axes[1, 1].transAxes)
-        axes[1, 1].set_title('Gradient Clipping Rate')
+        axes[1, 1].text(0.5, 0.5, 'No Log Probability Data', ha='center', va='center', transform=axes[1, 1].transAxes)
+        axes[1, 1].set_title('Log Probability Over Time')
     
     # Gradient vs Loss correlation (if both available)
     if gradients_df is not None and losses_df is not None and len(gradients_df) > 0 and len(losses_df) > 0:
@@ -327,6 +395,86 @@ def plot_from_csv(training_timestamp: str, category: str = DEFAULT_CATEGORY):
     else:
         axes[1, 2].text(0.5, 0.5, 'No Gradient or Loss Data', ha='center', va='center', transform=axes[1, 2].transAxes)
         axes[1, 2].set_title('Gradient vs Loss Correlation')
+    
+    # Log probability distribution and statistics
+    if log_prob_df is not None and len(log_prob_df) > 0:
+        axes[2, 0].hist(log_prob_df['log_probability'], bins=50, alpha=0.7, edgecolor='black')
+        mean_log_prob = log_prob_df['log_probability'].mean()
+        axes[2, 0].axvline(mean_log_prob, color='red', linestyle='--', 
+                          label=f'Mean: {mean_log_prob:.3f}')
+        axes[2, 0].set_title('Log Probability Distribution')
+        axes[2, 0].set_xlabel('Log Probability')
+        axes[2, 0].set_ylabel('Frequency')
+        axes[2, 0].legend()
+        axes[2, 0].grid(True, alpha=0.3)
+    else:
+        axes[2, 0].text(0.5, 0.5, 'No Log Probability Data', ha='center', va='center', transform=axes[2, 0].transAxes)
+        axes[2, 0].set_title('Log Probability Distribution')
+    
+    # Log probability vs reward correlation
+    if log_prob_df is not None and len(log_prob_df) > 0:
+        # Merge log prob data with episode rewards
+        episode_rewards = episodes_df.set_index('episode')['avg_reward']
+        log_prob_episode_mean = log_prob_df.groupby('episode')['log_probability'].mean()
+        
+        # Find common episodes
+        common_episodes = episode_rewards.index.intersection(log_prob_episode_mean.index)
+        if len(common_episodes) > 0:
+            reward_data = episode_rewards.loc[common_episodes]
+            log_prob_data = log_prob_episode_mean.loc[common_episodes]
+            
+            axes[2, 1].scatter(log_prob_data, reward_data, alpha=0.6, s=20)
+            axes[2, 1].set_title('Log Probability vs Reward')
+            axes[2, 1].set_xlabel('Mean Log Probability')
+            axes[2, 1].set_ylabel('Episode Reward')
+            axes[2, 1].grid(True, alpha=0.3)
+            
+            # Calculate correlation
+            correlation = log_prob_data.corr(reward_data)
+            axes[2, 1].text(0.02, 0.98, f'Correlation: {correlation:.3f}', 
+                           transform=axes[2, 1].transAxes, fontsize=9,
+                           verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            axes[2, 1].text(0.5, 0.5, 'No matching episodes', ha='center', va='center', transform=axes[2, 1].transAxes)
+            axes[2, 1].set_title('Log Probability vs Reward')
+    else:
+        axes[2, 1].text(0.5, 0.5, 'No Log Probability Data', ha='center', va='center', transform=axes[2, 1].transAxes)
+        axes[2, 1].set_title('Log Probability vs Reward')
+    
+    # Log probability variance over time (policy exploration indicator)
+    if log_prob_df is not None and len(log_prob_df) > 0:
+        episode_log_prob_std = log_prob_df.groupby('episode')['log_probability'].std()
+        axes[2, 2].plot(episode_log_prob_std.index, episode_log_prob_std.values, 
+                       linewidth=2, alpha=0.7, label='Log Prob Std Dev')
+        
+        # Add smoothed version
+        if len(episode_log_prob_std) > 10:
+            window = min(20, len(episode_log_prob_std) // 4)
+            smoothed_std = episode_log_prob_std.rolling(window=window, center=True).mean()
+            axes[2, 2].plot(smoothed_std.index, smoothed_std.values, 
+                           linewidth=2, color='red', label=f'Smoothed (MA-{window})')
+        
+        axes[2, 2].set_title('Policy Exploration (Log Prob Variance)')
+        axes[2, 2].set_xlabel('Episode')
+        axes[2, 2].set_ylabel('Log Probability Std Dev')
+        axes[2, 2].legend()
+        axes[2, 2].grid(True, alpha=0.3)
+        
+        # Add interpretation text
+        mean_std = episode_log_prob_std.mean()
+        if mean_std > 1.0:
+            exploration_text = "High exploration"
+        elif mean_std > 0.1:
+            exploration_text = "Moderate exploration"
+        else:
+            exploration_text = "Low exploration"
+        
+        axes[2, 2].text(0.02, 0.98, f'Mean Std: {mean_std:.3f}\n{exploration_text}', 
+                        transform=axes[2, 2].transAxes, fontsize=9,
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    else:
+        axes[2, 2].text(0.5, 0.5, 'No Log Probability Data', ha='center', va='center', transform=axes[2, 2].transAxes)
+        axes[2, 2].set_title('Policy Exploration (Log Prob Variance)')
     
     plt.tight_layout()
     
@@ -384,6 +532,12 @@ def load_training_data(training_timestamp: str, category: str = DEFAULT_CATEGORY
         if gradient_csv.exists():
             data['gradients'] = pd.read_csv(gradient_csv)
             print(f"📊 Loaded {len(data['gradients'])} gradient entries")
+        
+        # Load log probabilities
+        log_prob_csv = logs_dir / "log_probabilities.csv"
+        if log_prob_csv.exists():
+            data['log_probabilities'] = pd.read_csv(log_prob_csv)
+            print(f"📊 Loaded {len(data['log_probabilities'])} log probability entries")
         
         return data
         

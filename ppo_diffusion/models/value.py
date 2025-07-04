@@ -16,28 +16,14 @@ class DiffusionValueNetwork(nn.Module):
     def __init__(self, feature_dim: int = 512):
         super(DiffusionValueNetwork, self).__init__()
         
-        # Initialize the value network
+        # Simplified network to prevent overfitting
         self.network = nn.Sequential(
-            nn.Linear(feature_dim, 1024),
-            nn.LayerNorm(1024),
-            # LeakyReLu or GeLU?
-            nn.GELU(),
-            nn.Dropout(0.2),
-            
-            nn.Linear(1024, 512),
-            nn.LayerNorm(512),
-            nn.GELU(),
-            nn.Dropout(0.2),
-            
-            nn.Linear(512, 256),
-            nn.LayerNorm(256),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(256, 128),
-            nn.GELU(),
-            
-            nn.Linear(128, 1)
+            nn.Linear(feature_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
         )
         
     

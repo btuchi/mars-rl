@@ -17,6 +17,7 @@ REWARD_LOG = []
 VALUE_PREDICTION_LOG = []
 RETURN_LOG = []
 BEST_REWARD_LOG = []
+LOG_PROB_LOG = []
 
 
 class TrainingLogger:
@@ -38,6 +39,7 @@ class TrainingLogger:
         self.return_csv = self.logs_dir / "returns.csv"
         self.gradient_csv = self.logs_dir / "gradient_log.csv"
         self.metadata_csv = self.logs_dir / "metadata.csv"
+        self.log_prob_csv = self.logs_dir / "log_probabilities.csv"
         
         # Initialize metadata
         self.metadata = {
@@ -59,6 +61,7 @@ class TrainingLogger:
         self.return_data = []
         self.value_prediction_data = []
         self.gradient_data = []
+        self.log_prob_data = []
         
         # Auto-save frequency
         self.save_frequency = LOG_SAVE_FREQUENCY
@@ -125,6 +128,25 @@ class TrainingLogger:
         # Auto-save every 10 entries
         if len(self.return_data) % 10 == 0:
             self.save_returns()
+    
+    def log_log_probability(self, log_prob: float, episode: int, trajectory_idx: int = 0):
+        """Log log probability data"""
+        log_prob_entry = {
+            'episode': episode,
+            'trajectory_idx': trajectory_idx,
+            'log_probability': log_prob,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        # Add to global list (for compatibility)
+        LOG_PROB_LOG.append(log_prob)
+        
+        # Also save to dedicated list for CSV
+        self.log_prob_data.append(log_prob_entry)
+
+        # Auto-save every 10 entries
+        if len(self.log_prob_data) % 10 == 0:
+            self.save_log_probabilities()
     
     def log_gradient_info(self, update_num: int, episode: int, gradient_info: dict):
         """Log gradient information"""
@@ -211,6 +233,16 @@ class TrainingLogger:
         except Exception as e:
             print(f"⚠️ Error saving returns: {e}")
     
+    def save_log_probabilities(self):
+        """Save log probabilities to CSV"""
+        try:
+            if self.log_prob_data:
+                df = pd.DataFrame(self.log_prob_data)
+                df.to_csv(self.log_prob_csv, index=False)
+                print(f"💾 Log probabilities saved: {len(self.log_prob_data)} entries")
+        except Exception as e:
+            print(f"⚠️ Error saving log probabilities: {e}")
+    
     def save_episode_log(self):
         """Save episode data to CSV"""
         try:
@@ -265,6 +297,7 @@ class TrainingLogger:
         self.save_metadata()
         self.save_value_predictions()
         self.save_returns()
+        self.save_log_probabilities()
         
         if final:
             print(f"📊 Final logs saved to: {self.logs_dir}")
@@ -335,6 +368,11 @@ def log_update(update_num: int, actor_loss: float, critic_loss: float, episode: 
     """Log update data (convenient wrapper)"""
     if _logger:
         _logger.log_update(update_num, actor_loss, critic_loss, episode, gradient_info)
+
+def log_log_probability(log_prob: float, episode: int, trajectory_idx: int = 0):
+    """Log log probability (convenient wrapper)"""
+    if _logger:
+        _logger.log_log_probability(log_prob, episode, trajectory_idx)
 
 def finalize_logging():
     """Complete logging and save final files"""
