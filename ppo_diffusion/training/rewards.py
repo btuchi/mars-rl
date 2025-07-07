@@ -80,14 +80,16 @@ class DiffusionRewardFunction:
         
         for i, (content_score, diversity_reward) in enumerate(zip(content_scores, individual_rewards)):
             # QUALITY GATE: Penalize noise, but keep scale reasonable
-            if content_score < 0.27:  # Threshold for "this is basically noise"
-                final_reward = penalty  # Scale-appropriate penalty
-                print(f"  🚨 Image {i}: NOISE DETECTED (CLIP={content_score:.3f}) -> Penalty {penalty:.3f}")
-            else:
+            # if content_score < 0.27:  # Threshold for "this is basically noise"
+            #     final_reward = penalty  # Scale-appropriate penalty
+            #     print(f"  🚨 Image {i}: NOISE DETECTED (CLIP={content_score:.3f}) -> Penalty {penalty:.3f}")
+            # else:
                 
-                final_reward = diversity_reward
+            #     final_reward = diversity_reward
                 
-                print(f"  ✅ Image {i}: diversity_score={diversity_reward:.3f}")
+            #     print(f"  ✅ Image {i}: diversity_score={diversity_reward:.3f}")
+
+            final_reward = 1.0 * diversity_reward + 0.0 * content_score
             
             hybrid_rewards.append(final_reward)
 

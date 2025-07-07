@@ -10,8 +10,6 @@ from ..utils.device import clear_gpu_cache
 if TYPE_CHECKING:
     from ..models.policy import LatentDiversityPolicy
 
-
-
 @dataclass
 class TrajectoryStep:
     """Represents a single step in the diffusion trajectory for RL training"""
@@ -37,10 +35,10 @@ class DiffusionSampler:
 
     def __init__(self, model_id: str = "CompVis/stable-diffusion-v1-4", 
                  device: str = "cuda", use_fp16: bool = False):
-        
+
         self.device = device
         self.dtype = torch.float16 if use_fp16 else torch.float32
-        
+
         clear_gpu_cache()
 
         # Load Stable Diffusion pipeline

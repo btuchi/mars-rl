@@ -2,7 +2,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-ref_features = np.load("ppo_diffusion/reference_crater_features.npz")
+ref_features = np.load("ppo_diffusion/reference_features/reference_crater_features_v1.npz")
 ref_array = np.stack([ref_features[key] for key in
 ref_features.keys()])
 
