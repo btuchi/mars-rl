@@ -169,25 +169,11 @@ class DiffusionPPOAgent:
         elif self.save_samples and episode is not None:
             should_save = (episode % 5 == 0)  # Save every 5 episodes
 
-        # Get prompt features and value using centralized feature extractor
-        prompt_features = self.feature_extractor.extract_text_features(prompt)
-        clear_gpu_cache()
-
-        prompt_features_tensor = torch.from_numpy(prompt_features).to(
-            device=self.device,
-            dtype=self.dtype
-        ).unsqueeze(0)
-
-        value = self.critic(prompt_features_tensor).detach().cpu().numpy()[0][0]
-
-        # Clean up prompt tensor
-        del prompt_features_tensor
-        clear_gpu_cache()
-            
         # Generate batch of trajectories
         trajectories = []
         log_probs = []
         log_prob_tensors = []
+        first_image_features = None
         
         print(f"Generating {self.images_per_prompt} images for prompt: '{prompt}'")
         for i in range(self.images_per_prompt):
@@ -213,6 +199,10 @@ class DiffusionPPOAgent:
             trajectories.append(trajectory)
             log_probs.append(log_prob_value)
             log_prob_tensors.append(log_prob_tensor)  # Keep gradient connection intact
+            
+            # Extract features from first trajectory for critic
+            if i == 0:
+                first_image_features = self.feature_extractor.extract_trajectory_features(trajectory)
             
             print(f"  Image {i+1}/{self.images_per_prompt} generated (log_prob: {log_prob_value:.6f})")
 
@@ -242,6 +232,15 @@ class DiffusionPPOAgent:
             # Note: Keep trajectory and log_prob_tensor in memory for gradient flow
             clear_gpu_cache()
         
+        # Calculate value from first image features
+        image_features_tensor = torch.from_numpy(first_image_features).to(
+            device=self.device,
+            dtype=self.dtype
+        ).unsqueeze(0)
+        value = self.critic(image_features_tensor).detach().cpu().numpy()[0][0]
+        del image_features_tensor
+        clear_gpu_cache()
+        
         # Calculate individual diversity rewards
         individual_rewards = self.reward_function.calculate_batch_rewards(trajectories, prompt)
         avg_reward = np.mean(individual_rewards)
@@ -260,10 +259,10 @@ class DiffusionPPOAgent:
         if episode is not None:
             self.log_episode_info(episode, prompt, avg_reward, individual_rewards.tolist())
         
-        # Store each trajectory with its individual reward
+        # Store each trajectory with its individual reward (use first image features for consistency)
         for i, (trajectory, log_prob, log_prob_tensor, reward) in enumerate(zip(trajectories, log_probs, log_prob_tensors, individual_rewards)):
             self.replay_buffer.add_memo(
-                prompt_features,
+                first_image_features,  # Use image features instead of prompt features
                 prompt,
                 trajectory,
                 reward,
@@ -272,7 +271,7 @@ class DiffusionPPOAgent:
                 log_prob_tensor
             )
         
-        return trajectories, individual_rewards, avg_reward, prompt_features
+        return trajectories, individual_rewards, avg_reward, first_image_features
 
     def compute_gae(self, rewards, values):
         """Simplified advantage computation for episodic tasks"""

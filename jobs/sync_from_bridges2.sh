@@ -37,15 +37,15 @@ SYNC_SUCCESS=0
 # Sync all three folders in one command (single password prompt)
 echo "📦 Syncing all training results folders..."
 rsync -avzhP --update \
-    --include="plots/" \
-    --include="plots/**" \
-    --include="images/" \
-    --include="images/**" \
-    --include="logs/" \
-    --include="logs/**" \
-    --include="images/" \
-    --include="images/**" \
-    "${BRIDGES2_USER}@${BRIDGES2_HOST}:/ocean/projects/eng240004p/btuchi/BRYCE/RL/ppo_diffusion/outputs/" "${LOCAL_DIR}/ppo_diffusion/outputs/"
+    --include="outputs/plots/" \
+    --include="outputs/plots/**" \
+    --include="outputs/images/" \
+    --include="outputs/images/**" \
+    --include="outputs/logs/" \
+    --include="outputs/logs/**" \
+    --include="outputs/images/" \
+    --include="outputs/images/**" \
+    "${BRIDGES2_USER}@${BRIDGES2_HOST}:/ocean/projects/eng240004p/btuchi/BRYCE/RL/ppo_diffusion/" "${LOCAL_DIR}/ppo_diffusion/"
 
 if [ $? -eq 0 ]; then 
     SYNC_SUCCESS=3
