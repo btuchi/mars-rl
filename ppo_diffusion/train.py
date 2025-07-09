@@ -34,7 +34,7 @@ def main(category: str = DEFAULT_CATEGORY):
         # Load reference features
         try:
             current_path = Path(__file__).parent
-            npz_data = np.load(current_path / "reference_features" / f"reference_{category}_features_v0.npz")
+            npz_data = np.load(current_path / "reference_features" / f"reference_{category}_features_v2.npz")
             array_keys = list(npz_data.keys())
             
             # Stack all individual feature vectors into a single array

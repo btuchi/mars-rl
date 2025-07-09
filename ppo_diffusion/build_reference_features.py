@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
 Build reference features from images in reference_images folder
-Creates NPZ file with DINO features for diversity reward calculation
+Creates NPZ file with ResNet-18 features for diversity reward calculation
 
 Usage:
     python build_reference_features.py
 
 This script will:
-1. Read all images from reference_images/DEFAULT_CATEGOR/ 
-2. Extract DINO ViT-B/16 features from each image
-3. Save as NPZ file to reference_features/reference_crater_features_v1.npz
+1. Read all images from reference_images/crater/ 
+2. Extract ResNet-18 features from each image
+3. Save as NPZ file to reference_features/reference_crater_features_v2.npz
 4. Verify the file can be loaded correctly
 
 The resulting NPZ file will be used by the training script for diversity rewards.
@@ -19,20 +19,24 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 import torch
+import torch.nn as nn
+import torchvision.models as models
 import torchvision.transforms as transforms
 from typing import List
 
 # Constants (hardcoded to avoid import conflicts)
 DEFAULT_CATEGORY = "crater"
 
-def load_dino_model(device='cuda' if torch.cuda.is_available() else 'cpu'):
-    """Load DINO model for feature extraction"""
-    print(f"Loading DINO model on device: {device}")
-    model = torch.hub.load('facebookresearch/dino:main', 'dino_vitb16')
+def load_resnet_model(device='cuda' if torch.cuda.is_available() else 'cpu'):
+    """Load ResNet-18 model for feature extraction"""
+    print(f"Loading ResNet-18 model on device: {device}")
+    model = models.resnet18(pretrained=True)
+    # Remove the final classification layer to get features
+    model = nn.Sequential(*list(model.children())[:-1])
     model = model.to(device)
     model.eval()
     
-    # DINO preprocessing
+    # ResNet preprocessing (ImageNet normalization)
     preprocess = transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
@@ -69,7 +73,7 @@ def load_and_preprocess_images(image_dir: Path, preprocess) -> tuple[List[torch.
             if image.mode != 'RGB':
                 image = image.convert('RGB')
             
-            # Preprocess for DINO
+            # Preprocess for ResNet
             image_tensor = preprocess(image)
             images.append(image_tensor)
             filenames.append(image_path.name)
@@ -82,7 +86,7 @@ def load_and_preprocess_images(image_dir: Path, preprocess) -> tuple[List[torch.
     return images, filenames
 
 def extract_features(model, images: List[torch.Tensor], device: str) -> np.ndarray:
-    """Extract DINO features from preprocessed images"""
+    """Extract ResNet-18 features from preprocessed images"""
     print(f"Extracting features from {len(images)} images...")
     
     # Stack images into batch
@@ -91,6 +95,8 @@ def extract_features(model, images: List[torch.Tensor], device: str) -> np.ndarr
     # Extract features
     with torch.no_grad():
         features = model(image_batch)
+        # ResNet output is [batch_size, 512, 1, 1], flatten to [batch_size, 512]
+        features = features.flatten(start_dim=1)
         # Normalize features
         features = features / features.norm(dim=-1, keepdim=True)
     
@@ -191,8 +197,8 @@ def main():
         print(f"   Please create the directory and add reference images.")
         return
     
-    # Load DINO model
-    model, preprocess, device = load_dino_model()
+    # Load ResNet model
+    model, preprocess, device = load_resnet_model()
     
     # Load and preprocess images
     images, filenames = load_and_preprocess_images(images_dir, preprocess)

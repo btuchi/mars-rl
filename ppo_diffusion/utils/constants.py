@@ -6,7 +6,7 @@ DEFAULT_CATEGORY = "crater"
 DEFAULT_MODEL_ID = "CompVis/stable-diffusion-v1-4"
 
 # PPO hyperparameters
-DEFAULT_LR_ACTOR = 1e-4
+DEFAULT_LR_ACTOR = 1e-3
 DEFAULT_LR_CRITIC = 1e-4
 DEFAULT_GAMMA = 0.9
 DEFAULT_LAMBDA = 0.95

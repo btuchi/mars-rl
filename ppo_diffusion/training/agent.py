@@ -8,6 +8,9 @@ import numpy as np
 import os
 from pathlib import Path
 import time
+
+# PHASE 1: Enable gradient anomaly detection for debugging
+torch.autograd.set_detect_anomaly(True)
 from PIL import Image
 import torchvision.transforms as transforms
 from typing import List, Tuple
@@ -47,7 +50,7 @@ class DiffusionPPOAgent:
         self.EPSILON_CLIP = DEFAULT_EPSILON_CLIP
         self.images_per_prompt = images_per_prompt
         
-        # Initialize centralized feature extractor (single CLIP instance)
+        # Initialize centralized feature extractor (ResNet-18)
         self.feature_extractor = FeatureExtractor(device=self.device)
         
         # Initialize networks
@@ -280,13 +283,21 @@ class DiffusionPPOAgent:
         return advantages
 
     def update(self):
-        """PPO update for diffusion models"""
+        """PPO update for diffusion models
+        
+        PHASE 1 DEBUGGING: Enhanced gradient anomaly detection active
+        - torch.autograd.set_detect_anomaly(True) enabled globally
+        - Detailed gradient anomaly monitoring for actor and critic
+        - Checks for NaN, Inf, and zero gradients
+        - Monitors gradient explosion/vanishing with thresholds
+        """
         print("Checking replay buffer...")
         if len(self.replay_buffer.trajectories) == 0:
             print("Skipping update: empty replay buffer")
             return
         
         print("Starting PPO update...")
+        print("🔍 [PHASE 1] Gradient anomaly detection ACTIVE")
         clear_gpu_cache()
 
         # Copy current actor to old_actor
@@ -402,7 +413,16 @@ class DiffusionPPOAgent:
                 print(f"Actor loss requires_grad: {actor_loss.requires_grad}")
                 print(f"Actor loss value: {actor_loss.item()}")
 
-                actor_loss.backward()
+                # PHASE 1: Enhanced gradient anomaly detection during backward pass
+                print("🔍 [PHASE 1] Starting actor backward pass with anomaly detection...")
+                try:
+                    actor_loss.backward()
+                    print("🔍 [PHASE 1] ✅ Actor backward pass completed successfully")
+                except RuntimeError as e:
+                    print(f"🔍 [PHASE 1] ❌ GRADIENT ANOMALY DETECTED in actor backward pass: {e}")
+                    print(f"🔍 [PHASE 1] Actor loss value: {actor_loss.item()}")
+                    print(f"🔍 [PHASE 1] Actor loss shape: {actor_loss.shape}")
+                    raise e
 
                 # DEBUG: Check individual parameter gradients
                 # print("🔍 DEBUG: Checking individual parameter gradients:")
@@ -418,10 +438,40 @@ class DiffusionPPOAgent:
 
                 # Calculate gradient norm BEFORE clipping
                 actor_grad_norm_before = 0
+                nan_gradients = 0
+                inf_gradients = 0
+                zero_gradients = 0
+                
                 for param in self.actor.diversity_policy.parameters():
                     if param.grad is not None:
+                        # PHASE 1: Check for gradient anomalies
+                        if torch.isnan(param.grad).any():
+                            nan_gradients += 1
+                        if torch.isinf(param.grad).any():
+                            inf_gradients += 1
+                        if param.grad.norm() == 0:
+                            zero_gradients += 1
+                            
                         actor_grad_norm_before += param.grad.data.norm(2).item() ** 2
+                        
                 actor_grad_norm_before = actor_grad_norm_before ** 0.5
+                
+                # PHASE 1: Report gradient anomalies
+                if nan_gradients > 0 or inf_gradients > 0:
+                    print(f"🔍 [PHASE 1] ⚠️ GRADIENT ANOMALIES DETECTED:")
+                    print(f"🔍 [PHASE 1]   - NaN gradients: {nan_gradients} parameters")
+                    print(f"🔍 [PHASE 1]   - Inf gradients: {inf_gradients} parameters")
+                    print(f"🔍 [PHASE 1]   - Zero gradients: {zero_gradients} parameters")
+                    print(f"🔍 [PHASE 1]   - Gradient norm: {actor_grad_norm_before:.6f}")
+                
+                if zero_gradients > 10:  # Threshold for concern
+                    print(f"🔍 [PHASE 1] ⚠️ HIGH ZERO GRADIENT COUNT: {zero_gradients} parameters have zero gradients (potential vanishing gradient)")
+                
+                if actor_grad_norm_before > 100:  # Threshold for exploding gradients
+                    print(f"🔍 [PHASE 1] ⚠️ EXPLODING GRADIENT DETECTED: norm={actor_grad_norm_before:.6f}")
+                    
+                if actor_grad_norm_before < 1e-6:  # Threshold for vanishing gradients
+                    print(f"🔍 [PHASE 1] ⚠️ VANISHING GRADIENT DETECTED: norm={actor_grad_norm_before:.6f}")
                 
                 # Adaptive gradient scaling for better gradient-loss correlation
                 # target_grad_norm = self.actor.diversity_policy.target_grad_norm
@@ -452,14 +502,55 @@ class DiffusionPPOAgent:
 
                 # Update critic
                 self.critic_optimizer.zero_grad()
-                critic_loss.backward()
+                
+                # PHASE 1: Enhanced gradient anomaly detection for critic
+                print("🔍 [PHASE 1] Starting critic backward pass with anomaly detection...")
+                try:
+                    critic_loss.backward()
+                    print("🔍 [PHASE 1] ✅ Critic backward pass completed successfully")
+                except RuntimeError as e:
+                    print(f"🔍 [PHASE 1] ❌ GRADIENT ANOMALY DETECTED in critic backward pass: {e}")
+                    print(f"🔍 [PHASE 1] Critic loss value: {critic_loss.item()}")
+                    print(f"🔍 [PHASE 1] Critic loss shape: {critic_loss.shape}")
+                    raise e
 
                 total_norm = 0
+                critic_nan_gradients = 0
+                critic_inf_gradients = 0
+                critic_zero_gradients = 0
+                
                 for name, param in self.critic.named_parameters():
                     if param.grad is not None:
+                        # PHASE 1: Check for critic gradient anomalies
+                        if torch.isnan(param.grad).any():
+                            critic_nan_gradients += 1
+                        if torch.isinf(param.grad).any():
+                            critic_inf_gradients += 1
+                        if param.grad.norm() == 0:
+                            critic_zero_gradients += 1
+                            
                         param_norm = param.grad.data.norm(2)
                         total_norm += param_norm.item() ** 2
+                        
                 total_norm = total_norm ** (1. / 2)
+                
+                # PHASE 1: Report critic gradient anomalies
+                if critic_nan_gradients > 0 or critic_inf_gradients > 0:
+                    print(f"🔍 [PHASE 1] ⚠️ CRITIC GRADIENT ANOMALIES DETECTED:")
+                    print(f"🔍 [PHASE 1]   - NaN gradients: {critic_nan_gradients} parameters")
+                    print(f"🔍 [PHASE 1]   - Inf gradients: {critic_inf_gradients} parameters")
+                    print(f"🔍 [PHASE 1]   - Zero gradients: {critic_zero_gradients} parameters")
+                    print(f"🔍 [PHASE 1]   - Gradient norm: {total_norm:.6f}")
+                
+                if critic_zero_gradients > 5:  # Lower threshold for critic (smaller network)
+                    print(f"🔍 [PHASE 1] ⚠️ CRITIC HIGH ZERO GRADIENT COUNT: {critic_zero_gradients} parameters have zero gradients")
+                
+                if total_norm > 100:  # Threshold for exploding gradients
+                    print(f"🔍 [PHASE 1] ⚠️ CRITIC EXPLODING GRADIENT DETECTED: norm={total_norm:.6f}")
+                    
+                if total_norm < 1e-6:  # Threshold for vanishing gradients
+                    print(f"🔍 [PHASE 1] ⚠️ CRITIC VANISHING GRADIENT DETECTED: norm={total_norm:.6f}")
+                
                 print(f"🔍 Critic gradient norm: {total_norm:.6f}")
 
 
