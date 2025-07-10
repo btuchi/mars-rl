@@ -70,12 +70,16 @@ class DiffusionPPOAgent:
             lr=self.LR_ACTOR,
             weight_decay=1e-4
         )
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.LR_CRITIC, weight_decay=1e-3)
+        # PHASE 2: Switch critic from Adam to AdamW for better weight decay handling
+        self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=self.LR_CRITIC, weight_decay=1e-3)
         print(f"🎯 Only training {sum(p.numel() for p in self.actor.diversity_policy.parameters())} policy parameters")
+        from ..utils.constants import DEFAULT_REWARD_METRIC
+        print(f"🔍 Using {DEFAULT_REWARD_METRIC} reward metric (configurable in constants.py)")
         
         # Components
         self.replay_buffer = DiffusionReplayMemory(batch_size)
-        self.reward_function = DiffusionRewardFunction(ref_features, self.feature_extractor)
+        # Use configurable reward metric from constants
+        self.reward_function = DiffusionRewardFunction(ref_features, self.feature_extractor, reward_metric=DEFAULT_REWARD_METRIC)
 
         # Image saving parameters
         self.save_size = (64, 64)
@@ -214,8 +218,8 @@ class DiffusionPPOAgent:
                 try:
                     features = self.feature_extractor.extract_trajectory_features(trajectory)
                     features = features.reshape(1, -1)
-                    from ..diversity_reward import calculate_individual_diversity_rewards
-                    individual_reward = calculate_individual_diversity_rewards(
+                    # Use the reward function's current metric for sample evaluation
+                    individual_reward = self.reward_function.reward_metric.calculate_rewards(
                         features, self.reward_function.ref_features, gamma=None
                     )[0]
                     individual_reward = self.reward_function.normalize_reward(individual_reward)
@@ -423,18 +427,6 @@ class DiffusionPPOAgent:
                     print(f"🔍 [PHASE 1] Actor loss value: {actor_loss.item()}")
                     print(f"🔍 [PHASE 1] Actor loss shape: {actor_loss.shape}")
                     raise e
-
-                # DEBUG: Check individual parameter gradients
-                # print("🔍 DEBUG: Checking individual parameter gradients:")
-                # param_count = 0
-                # for name, param in self.actor.diversity_policy.named_parameters():
-                #     if param.grad is not None:
-                #         grad_norm = param.grad.data.norm(2).item()
-                #         print(f"  {name}: grad_norm={grad_norm:.8f}, requires_grad={param.requires_grad}")
-                #         param_count += 1
-                #     else:
-                #         print(f"  {name}: grad=None, requires_grad={param.requires_grad}")
-                # print(f"🔍 DEBUG: Total parameters with gradients: {param_count}")
 
                 # Calculate gradient norm BEFORE clipping
                 actor_grad_norm_before = 0

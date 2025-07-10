@@ -4,7 +4,7 @@ import numpy as np
 from typing import List
 from ..core.trajectory import DiffusionTrajectory
 from ..core.features import FeatureExtractor
-from ..diversity_reward import calculate_individual_diversity_rewards
+from .reward_metrics import get_reward_metric, list_available_metrics
 
 class DiffusionRewardFunction:
     """
@@ -17,11 +17,18 @@ class DiffusionRewardFunction:
     Returns:
         Individual diversity rewards for each trajectory
     """
-    def __init__(self, ref_features: np.ndarray, feature_extractor: FeatureExtractor, buffer_size: int = 50):
+    def __init__(self, ref_features: np.ndarray, feature_extractor: FeatureExtractor, buffer_size: int = 50, reward_metric: str = "MMD"):
         self.ref_features = ref_features
         self.buffer_size = buffer_size
         self.reward_history = []
         self.feature_extractor = feature_extractor
+        
+        # Configurable reward metric system
+        self.reward_metric_name = reward_metric
+        self.reward_metric = get_reward_metric(reward_metric)
+        
+        print(f"🎯 Using reward metric: {reward_metric}")
+        print(f"🎯 Available metrics: {list_available_metrics()}")
     
     def calculate_batch_rewards(self, trajectories: List[DiffusionTrajectory], prompt: str) -> np.ndarray:
         """
@@ -46,15 +53,17 @@ class DiffusionRewardFunction:
         # Stack into single np array (batch_size x feature_dim)
         batch_features_array = np.vstack(batch_features)
 
-        # Calculate Individual Diversity Rewards (pure visual diversity)
-        individual_rewards = calculate_individual_diversity_rewards(
+        # PHASE 4: Calculate rewards using selected metric
+        print(f"🎯 [PHASE 4] Computing {self.reward_metric_name} rewards...")
+        individual_rewards = self.reward_metric.calculate_rewards(
             batch_features_array,
             self.ref_features,
             gamma=None  # Auto-set gamma
         )
 
-        # Use pure diversity rewards (no text-image similarity component)
+        # Use diversity rewards from selected metric
         diversity_rewards = individual_rewards
+        print(f"🎯 [PHASE 4] {self.reward_metric_name} rewards: [{diversity_rewards.min():.6f}, {diversity_rewards.max():.6f}]")
         
         # Apply z-score normalization with extended warm-up
         normalized_rewards = self.normalize_batch_rewards(diversity_rewards)

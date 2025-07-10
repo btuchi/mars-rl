@@ -6,7 +6,7 @@ import sys
 import os
 sys.path.append(os.path.abspath('.'))
 
-from ppo_diffusion.diversity_reward import calculate_individual_diversity_rewards, calculate_mmd_reward
+from ppo_diffusion.training.reward_metrics.mmd import calculate_individual_diversity_rewards, calculate_mmd_reward
 
 def test_reward_signal_strength():
     """Test how strong/weak the current reward signals are"""

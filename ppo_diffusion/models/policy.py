@@ -29,11 +29,11 @@ class LatentDiversityPolicy(nn.Module):
             nn.Linear(text_dim, 1024),
             # nn.GELU(),
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.1),  # PHASE 3: Dropout disabled (was 0.1)
             nn.Linear(1024, 512),
             # nn.GELU(),
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.1),  # PHASE 3: Dropout disabled (was 0.1)
             nn.Linear(512, latent_dim * latent_size * latent_size),
             nn.Tanh()
         )
@@ -187,10 +187,7 @@ class DiffusionPolicyNetwork(nn.Module):
         # MODIFIED: for diversity policy network
         # if hasattr(trajectory, 'policy_log_prob'):
         return trajectory.policy_log_prob
-        # else:
-        #     # Fallback to simple calculation
-        #     return torch.tensor(0.0, requires_grad=True, device=self.sampler.device)
-    
+        #
     def select_trajectory(self, prompt: str) -> Tuple:
         """
         Sample trajectory with log prob (equivalent to select_action)

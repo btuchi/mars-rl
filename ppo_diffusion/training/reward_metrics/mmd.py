@@ -20,7 +20,7 @@ def calculate_mmd_reward(generated_features, reference_features, gamma=None):
     mmd = mmd_XX + mmd_YY - 2 * mmd_XY
     return np.exp(-0.5 * mmd)
 
-def calculate_individual_diversity_rewards(generated_features, reference_features, gamma=None):
+def calculate_individual_mmd_rewards(generated_features, reference_features, gamma=None):
     """
     Efficient batched calculation of individual diversity rewards.
     Pre-computes kernel matrices to avoid redundant calculations.

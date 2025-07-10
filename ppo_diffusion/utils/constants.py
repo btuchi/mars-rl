@@ -26,3 +26,6 @@ DEFAULT_GUIDANCE_SCALE = 8.0
 
 # Logging
 LOG_SAVE_FREQUENCY = 5
+
+# Available options: "MMD", "MI", "FID" (Ha), "LPIPS"
+DEFAULT_REWARD_METRIC = "MI"  # Switch between MMD and MI easily
