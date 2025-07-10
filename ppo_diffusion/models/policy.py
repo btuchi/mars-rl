@@ -25,18 +25,33 @@ class LatentDiversityPolicy(nn.Module):
         # )
 
         # Separate networks for mean and log_std for proper probability modeling
+        # self.mean_net = nn.Sequential(
+        #     nn.Linear(text_dim, 1024),
+        #     # nn.GELU(),
+        #     nn.ReLU(),
+        #     nn.Dropout(0.1),  # PHASE 3: Dropout disabled (was 0.1)
+        #     nn.Linear(1024, 512),
+        #     # nn.GELU(),
+        #     nn.ReLU(),
+        #     nn.Dropout(0.1),  # PHASE 3: Dropout disabled (was 0.1)
+        #     nn.Linear(512, latent_dim * latent_size * latent_size),
+        #     nn.Tanh()
+        # )
+
         self.mean_net = nn.Sequential(
-            nn.Linear(text_dim, 1024),
-            # nn.GELU(),
-            nn.ReLU(),
-            nn.Dropout(0.1),  # PHASE 3: Dropout disabled (was 0.1)
+            nn.Linear(text_dim, 2048),  # Increased width
+            nn.GELU(),                  # Using GELU
+            nn.Dropout(0.1),
+            nn.Linear(2048, 1024),      # Added another layer
+            nn.GELU(),
+            nn.Dropout(0.1),
             nn.Linear(1024, 512),
-            # nn.GELU(),
-            nn.ReLU(),
-            nn.Dropout(0.1),  # PHASE 3: Dropout disabled (was 0.1)
+            nn.GELU(),
+            nn.Dropout(0.1),
             nn.Linear(512, latent_dim * latent_size * latent_size),
             nn.Tanh()
         )
+
         
         # Log standard deviation (learned parameter)
         self.log_std = nn.Parameter(torch.zeros(latent_dim * latent_size * latent_size) - 1.0)  # Start with small std
@@ -110,9 +125,9 @@ class LatentDiversityPolicy(nn.Module):
 
 class DiffusionPolicyNetwork(nn.Module):
     """
-    Policy Network for Diffusion Models:
-        - Wraps the UNet to act like vanilla PPO's Actor
-        - Instead of outputting action distribution, it IS the policy that generates images
+    Switchable Policy Network for Diffusion Models:
+        - Supports both DIVERSITY_POLICY and LORA_UNET modes
+        - Mode controlled by DEFAULT_TRAINING_MODE in constants.py
     Input:
         - Text prompt (converted to embeddings internally)
     Output:
@@ -123,75 +138,147 @@ class DiffusionPolicyNetwork(nn.Module):
         self.sampler = sampler
         self.unet = sampler.unet  # This is our "policy network"
         self.num_inference_steps = num_inference_steps
-
-        # NEW: Small policy network instead of training UNet  
+        
+        # Import training mode from constants
+        from ..utils.constants import DEFAULT_TRAINING_MODE
+        self.training_mode = DEFAULT_TRAINING_MODE
+        
+        print(f"🎛️ Initializing policy in {self.training_mode} mode")
+        
+        if self.training_mode == "DIVERSITY_POLICY":
+            self._setup_diversity_policy()
+        elif self.training_mode == "LORA_UNET":
+            self._setup_lora_unet()
+        else:
+            raise ValueError(f"Unknown training mode: {self.training_mode}")
+    
+    def _setup_diversity_policy(self):
+        """Setup for diversity policy mode (current approach)"""
+        print("🔧 Setting up Diversity Policy mode...")
+        
+        # Create small policy network instead of training UNet  
         # Stable Diffusion text embeddings are 768-dimensional
         self.diversity_policy = LatentDiversityPolicy(text_dim=768)
         
         # Move diversity policy to same device as sampler
-        self.diversity_policy = self.diversity_policy.to(sampler.device)
+        self.diversity_policy = self.diversity_policy.to(self.sampler.device)
         
         # FREEZE the UNet - we won't train it anymore
         for param in self.unet.parameters():
             param.requires_grad = False
         
         print("✅ UNet frozen - only training LatentDiversityPolicy")
+    
+    def _setup_lora_unet(self):
+        """Setup for LoRA UNet mode using PEFT library"""
+        print("🔧 Setting up LoRA UNet mode...")
+        
+        try:
+            from peft import LoraConfig, get_peft_model, TaskType
+            print("✅ PEFT library loaded successfully")
+        except ImportError:
+            print("❌ PEFT library not found. Install with: pip install peft")
+            raise ImportError("PEFT library required for LoRA mode")
+        
+        # No diversity policy in LoRA mode - we train the UNet directly
+        self.diversity_policy = None
+        
+        # Configure LoRA for UNet
+        # Target attention layers in UNet for LoRA adaptation
+        target_modules = [
+            "to_q",  # Query projections in attention
+            "to_k",  # Key projections in attention
+            "to_v",  # Value projections in attention
+            "to_out.0",  # Output projections in attention
+        ]
+        
+        lora_config = LoraConfig(
+            r=16,  # Rank of adaptation - balance between expressiveness and efficiency
+            lora_alpha=32,  # LoRA scaling parameter
+            target_modules=target_modules,
+            lora_dropout=0.1,  # Dropout for LoRA layers
+            bias="none",  # Don't adapt bias terms
+            task_type=TaskType.DIFFUSION,  # Specify diffusion task type
+        )
+        
+        # Apply LoRA to UNet
+        self.unet = get_peft_model(self.unet, lora_config)
+        
+        # Print parameter counts
+        total_params = sum(p.numel() for p in self.unet.parameters())
+        trainable_params = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
+        
+        print(f"✅ LoRA UNet configured:")
+        print(f"   - Total parameters: {total_params:,}")
+        print(f"   - Trainable parameters: {trainable_params:,}")
+        print(f"   - Trainable percentage: {100 * trainable_params / total_params:.2f}%")
+        print(f"   - LoRA rank: {lora_config.r}")
+        print(f"   - LoRA alpha: {lora_config.lora_alpha}")
+        
+        # Store LoRA config for reference
+        self.lora_config = lora_config
+    
+    def get_trainable_parameters(self):
+        """Get parameters to train based on current mode"""
+        if self.training_mode == "DIVERSITY_POLICY":
+            return self.diversity_policy.parameters()
+        elif self.training_mode == "LORA_UNET":
+            # Return only LoRA parameters (PEFT automatically handles this)
+            return filter(lambda p: p.requires_grad, self.unet.parameters())
+        else:
+            raise ValueError(f"Unknown training mode: {self.training_mode}")
         
     def forward(self, prompt: str):
         """
-        Generate trajectory for given prompt (equivalent to actor forward pass)
+        Generate trajectory for given prompt (mode-aware)
         Input:
             - Prompt
         Output:
             - complete trajectory (20 denoising actions)
-            - instead of an action distribution (vanilla)
         """
-        # return self.sampler.sample_with_trajectory_recording(
-        #     prompt=prompt,
-        #     num_inference_steps=self.num_inference_steps
-        # )
+        if self.training_mode == "DIVERSITY_POLICY":
+            return self._diversity_policy_forward(prompt)
+        elif self.training_mode == "LORA_UNET":
+            return self._lora_unet_forward(prompt)
+        else:
+            raise ValueError(f"Unknown training mode: {self.training_mode}")
+    
+    def _diversity_policy_forward(self, prompt: str):
+        """Forward pass for diversity policy mode"""
         return self.sampler.sample_with_policy_modification(
             prompt=prompt,
             policy_network=self.diversity_policy,
             num_inference_steps=self.num_inference_steps
         )
     
+    def _lora_unet_forward(self, prompt: str):
+        """Forward pass for LoRA UNet mode"""
+        # Use standard sampling with LoRA-adapted UNet
+        return self.sampler.sample_with_lora_unet(
+            prompt=prompt,
+            num_inference_steps=self.num_inference_steps
+        )
+    
     def calculate_log_prob(self, trajectory) -> torch.Tensor:
         """
-        Calculate log probability of trajectory (equivalent to action log prob)
+        Calculate log probability of trajectory (mode-aware)
         Arg:
             - A diffusion trajectory
         Return
             - the log probability this trajectory happens to generate images
         """
-        # if trajectory.total_log_prob is not None:
-        #     print("log probability from trajectory:", trajectory.total_log_prob)
-        #     return trajectory.total_log_prob
-        # else:
-
-        #     log_probs = []
-
-        #     # Each step has its own log probability
-        #     for step in trajectory.steps:
-        #         # Ensure log_prob is a tensor with gradients
-        #         # print("log probability:", step.log_prob)
-        #         if isinstance(step.log_prob, torch.Tensor):
-        #             log_probs.append(step.log_prob)
-        #         else:
-        #             # Convert to tensor if needed
-        #             log_probs.append(torch.tensor(step.log_prob, requires_grad=True))
-            
-        #     # Total log probability = sum of all steps
-        #     return torch.stack(log_probs).sum()
-
-        # MODIFIED: for diversity policy network
-        # if hasattr(trajectory, 'policy_log_prob'):
-        return trajectory.policy_log_prob
-        #
+        if self.training_mode == "DIVERSITY_POLICY":
+            # Use policy log probability from diversity policy
+            return trajectory.policy_log_prob
+        elif self.training_mode == "LORA_UNET":
+            # Use denoising log probability from LoRA UNet
+            return trajectory.denoising_log_prob
+        else:
+            raise ValueError(f"Unknown training mode: {self.training_mode}")
     def select_trajectory(self, prompt: str) -> Tuple:
         """
         Sample trajectory with log prob (equivalent to select_action)
-        disabled torch.no_grad() to enable gradient flow for training
+        Mode-aware trajectory selection for both diversity policy and LoRA UNet
         Arg:
             - prompt
         Return

@@ -58,21 +58,19 @@ class DiffusionPPOAgent:
         self.old_actor = DiffusionPolicyNetwork(sampler, num_inference_steps)
         self.critic = DiffusionValueNetwork(feature_dim).to(self.device).to(self.dtype)
 
-        # Handle DataParallel case for optimizers
-        # if hasattr(self.actor.unet, 'module'):
-        #     actor_params = self.actor.unet.module.parameters()
-        # else:
-        #     actor_params = self.actor.unet.parameters()
-        
-        # Optimizers
+        # Optimizers - use switchable parameter selection
+        trainable_params = list(self.actor.get_trainable_parameters())
         self.actor_optimizer = optim.AdamW(
-            self.actor.diversity_policy.parameters(),
+            trainable_params,  # Mode-aware parameter selection
             lr=self.LR_ACTOR,
             weight_decay=1e-4
         )
         # PHASE 2: Switch critic from Adam to AdamW for better weight decay handling
         self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=self.LR_CRITIC, weight_decay=1e-3)
-        print(f"🎯 Only training {sum(p.numel() for p in self.actor.diversity_policy.parameters())} policy parameters")
+        # Mode-aware parameter counting and reporting
+        trainable_params = sum(p.numel() for p in self.actor.get_trainable_parameters())
+        print(f"🎯 Training {trainable_params:,} parameters in {self.actor.training_mode} mode")
+        
         from ..utils.constants import DEFAULT_REWARD_METRIC
         print(f"🔍 Using {DEFAULT_REWARD_METRIC} reward metric (configurable in constants.py)")
         
@@ -339,7 +337,7 @@ class DiffusionPPOAgent:
         all_critic_losses = []
 
         # Train for multiple epochs
-        for epoch_i in range(self.EPOCH):
+        for _ in range(self.EPOCH):
             for batch in batches:
                 if len(batch) == 0:
                     continue
@@ -347,11 +345,10 @@ class DiffusionPPOAgent:
                 # Get current log probs
                 current_log_probs = []
                 for idx in batch:
-                    trajectory = memo_trajectories[idx]
                     prompt = memo_prompts[idx]
 
                     # Generate FRESH trajectory with current policy
-                    fresh_trajectory, fresh_log_prob = self.actor.select_trajectory(prompt)
+                    _, fresh_log_prob = self.actor.select_trajectory(prompt)
                     print(f"🔍 DEBUG: fresh_log_prob requires_grad={fresh_log_prob.requires_grad}, value={fresh_log_prob.item():.6f}")
                     current_log_probs.append(fresh_log_prob)
 
@@ -434,7 +431,15 @@ class DiffusionPPOAgent:
                 inf_gradients = 0
                 zero_gradients = 0
                 
-                for param in self.actor.diversity_policy.parameters():
+                # Get trainable parameters based on mode
+                if self.actor.training_mode == "DIVERSITY_POLICY":
+                    trainable_params = self.actor.diversity_policy.parameters()
+                elif self.actor.training_mode == "LORA_UNET":
+                    trainable_params = list(filter(lambda p: p.requires_grad, self.actor.unet.parameters()))
+                else:
+                    trainable_params = []
+                
+                for param in trainable_params:
                     if param.grad is not None:
                         # PHASE 1: Check for gradient anomalies
                         if torch.isnan(param.grad).any():
@@ -478,12 +483,20 @@ class DiffusionPPOAgent:
                 #         )
                 #     print(f"🔍 Gradient scale updated: {self.actor.diversity_policy.gradient_scale.item():.4f} (target_norm={target_grad_norm:.6f}, actual_norm={actor_grad_norm_before:.6f})")
 
-                # Handle gradient clipping for diversity policy (not UNet)
-                torch.nn.utils.clip_grad_norm_(self.actor.diversity_policy.parameters(), max_norm=0.5)
+                # Handle gradient clipping (mode-aware)
+                if self.actor.training_mode == "DIVERSITY_POLICY":
+                    torch.nn.utils.clip_grad_norm_(self.actor.diversity_policy.parameters(), max_norm=0.5)
+                    clip_params = list(self.actor.diversity_policy.parameters())
+                elif self.actor.training_mode == "LORA_UNET":
+                    lora_params = list(filter(lambda p: p.requires_grad, self.actor.unet.parameters()))
+                    torch.nn.utils.clip_grad_norm_(lora_params, max_norm=0.5)
+                    clip_params = lora_params
+                else:
+                    clip_params = []
 
                 # Calculate gradient norm AFTER clipping  
                 actor_grad_norm_after = 0
-                for param in self.actor.diversity_policy.parameters():
+                for param in clip_params:
                     if param.grad is not None:
                         actor_grad_norm_after += param.grad.data.norm(2).item() ** 2
                 actor_grad_norm_after = actor_grad_norm_after ** 0.5
@@ -511,7 +524,7 @@ class DiffusionPPOAgent:
                 critic_inf_gradients = 0
                 critic_zero_gradients = 0
                 
-                for name, param in self.critic.named_parameters():
+                for param in self.critic.parameters():
                     if param.grad is not None:
                         # PHASE 1: Check for critic gradient anomalies
                         if torch.isnan(param.grad).any():

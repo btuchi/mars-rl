@@ -27,5 +27,9 @@ DEFAULT_GUIDANCE_SCALE = 8.0
 # Logging
 LOG_SAVE_FREQUENCY = 5
 
-# Available options: "MMD", "MI", "FID" (Ha), "LPIPS"
-DEFAULT_REWARD_METRIC = "MI"  # Switch between MMD and MI easily
+# Available options: "MMD", "MI", "FID" (Not yet implemented), "LPIPS" (Not yet implemented)
+DEFAULT_REWARD_METRIC = "MMD"  # Switch between MMD and MI easily
+
+# TRAINING MODE CONFIGURATION
+# Available options: "DIVERSITY_POLICY", "LORA_UNET"
+DEFAULT_TRAINING_MODE = "LORA_UNET"  # Switch between training approaches

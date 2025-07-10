@@ -95,8 +95,8 @@ def main(category: str = DEFAULT_CATEGORY):
         update_counter = 0
         
         print("🚀 Starting Diffusion PPO training...")
-        print(f"📊 CSV logs will be saved every {logger.save_frequency} episodes")
-        print(f"Episodes per update: {DEFAULT_EPISODES_PER_UPDATE}")
+        # print(f"📊 CSV logs will be saved every {logger.save_frequency} episodes")
+        # print(f"Episodes per update: {DEFAULT_EPISODES_PER_UPDATE}")
         print(f"Images per episode: {DEFAULT_BATCH_SIZE} (batch generation)")
         print(f"Total episodes: {DEFAULT_NUM_EPISODES}")
         
