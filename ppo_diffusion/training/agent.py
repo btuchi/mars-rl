@@ -302,8 +302,22 @@ class DiffusionPPOAgent:
         print("🔍 [PHASE 1] Gradient anomaly detection ACTIVE")
         clear_gpu_cache()
 
-        # Copy current actor to old_actor
-        self.old_actor.diversity_policy.load_state_dict(self.actor.diversity_policy.state_dict())
+        # Copy current actor to old_actor (mode-aware)
+        if self.actor.training_mode == "DIVERSITY_POLICY":
+            self.old_actor.diversity_policy.load_state_dict(self.actor.diversity_policy.state_dict())
+        elif self.actor.training_mode == "LORA_UNET":
+            # For LoRA mode, we need to copy the LoRA adapter weights
+            try:
+                from peft import get_peft_model_state_dict, set_peft_model_state_dict
+                lora_state_dict = get_peft_model_state_dict(self.actor.unet)
+                set_peft_model_state_dict(self.old_actor.unet, lora_state_dict)
+                print("🔄 LoRA adapter weights copied to old_actor")
+            except Exception as e:
+                print(f"⚠️ Could not copy LoRA state: {e}")
+                # Fallback: create fresh old_actor (less efficient but safe)
+                from ..models.policy import DiffusionPolicyNetwork
+                self.old_actor = DiffusionPolicyNetwork(self.actor.sampler, self.actor.num_inference_steps)
+                print("🔄 Created fresh old_actor as fallback")
         
         # Get trajectory data
         memo_features, memo_prompts, memo_trajectories, memo_rewards, memo_values, memo_log_probs, memo_log_prob_tensors, batches = self.replay_buffer.sample()
@@ -607,12 +621,28 @@ class DiffusionPPOAgent:
         return None, None, None, None, None
     
     def save_policy(self):
-        """Save the trained diversity policy"""
+        """Save the trained policy (mode-aware)"""
         models_dir = Path(__file__).parent.parent / "outputs" / "models"
         models_dir.mkdir(exist_ok=True)
-        policy_path = models_dir / f"{DEFAULT_CATEGORY}_diversity_policy_{self.training_start}.pth"
-
-        # Save diversity policy state dict
-        state_dict = self.actor.diversity_policy.state_dict()
-        torch.save(state_dict, policy_path)
-        print(f"Diversity policy saved to: {policy_path}")
+        
+        if self.actor.training_mode == "DIVERSITY_POLICY":
+            policy_path = models_dir / f"{DEFAULT_CATEGORY}_diversity_policy_{self.training_start}.pth"
+            # Save diversity policy state dict
+            state_dict = self.actor.diversity_policy.state_dict()
+            torch.save(state_dict, policy_path)
+            print(f"Diversity policy saved to: {policy_path}")
+            
+        elif self.actor.training_mode == "LORA_UNET":
+            policy_path = models_dir / f"{DEFAULT_CATEGORY}_lora_unet_{self.training_start}.pth"
+            # Save LoRA adapter weights
+            try:
+                from peft import get_peft_model_state_dict
+                lora_state_dict = get_peft_model_state_dict(self.actor.unet)
+                torch.save(lora_state_dict, policy_path)
+                print(f"LoRA adapter weights saved to: {policy_path}")
+            except Exception as e:
+                print(f"⚠️ Could not save LoRA weights: {e}")
+                # Fallback: save entire UNet state (less efficient)
+                fallback_path = models_dir / f"{DEFAULT_CATEGORY}_full_unet_{self.training_start}.pth"
+                torch.save(self.actor.unet.state_dict(), fallback_path)
+                print(f"Full UNet state saved to: {fallback_path}")

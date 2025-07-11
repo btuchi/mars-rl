@@ -27,8 +27,11 @@ def main(category: str = DEFAULT_CATEGORY):
     print(f"=== DIFFUSION PPO TRAINING - {timestamp} ===")
     print(f"🎯 Training Category: {category}")
 
-    # Initialize CSV logger
-    logger = initialize_logger(timestamp, category)
+    # Get training mode from constants for logging
+    from .utils.constants import DEFAULT_TRAINING_MODE
+    
+    # Initialize CSV logger with training mode
+    logger = initialize_logger(timestamp, category, DEFAULT_TRAINING_MODE)
     
     try:
         # Load reference features
@@ -196,7 +199,7 @@ def main(category: str = DEFAULT_CATEGORY):
         plot_diffusion_training(
             reward_buffer, ACTOR_LOSS_LOG, CRITIC_LOSS_LOG, BEST_REWARD_LOG,
             VALUE_PREDICTION_LOG, RETURN_LOG, LOG_PROB_LOG, DEFAULT_NUM_EPISODES-1, 
-            category=category, timestamp=timestamp
+            category=category, timestamp=timestamp, training_mode=agent.actor.training_mode
         )
 
     except KeyboardInterrupt:

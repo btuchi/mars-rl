@@ -23,9 +23,10 @@ LOG_PROB_LOG = []
 class TrainingLogger:
     """Robust CSV logger that saves periodically and on interruption"""
 
-    def __init__(self, training_timestamp: str, category: str = DEFAULT_CATEGORY):
+    def __init__(self, training_timestamp: str, category: str = DEFAULT_CATEGORY, training_mode: str = None):
         self.training_timestamp = training_timestamp
         self.category = category
+        self.training_mode = training_mode
         
         # Setup directory
         current_path = Path(__file__).parent.parent
@@ -45,6 +46,7 @@ class TrainingLogger:
         self.metadata = {
             'training_timestamp': training_timestamp,
             'category': category,
+            'training_mode': training_mode or 'UNKNOWN',
             'start_time': time.strftime('%Y-%m-%d %H:%M:%S'),
             'end_time': None,
             'total_episodes': 0,
@@ -341,10 +343,10 @@ class TrainingLogger:
 # Global logger instance
 _logger = None
 
-def initialize_logger(training_timestamp: str, category: str = DEFAULT_CATEGORY):
+def initialize_logger(training_timestamp: str, category: str = DEFAULT_CATEGORY, training_mode: str = None):
     """Initialize the global logger"""
     global _logger
-    _logger = TrainingLogger(training_timestamp, category)
+    _logger = TrainingLogger(training_timestamp, category, training_mode)
     return _logger
 
 # Wrapper functions for backward compatibility

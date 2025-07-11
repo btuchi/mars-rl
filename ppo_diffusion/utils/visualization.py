@@ -8,7 +8,7 @@ from .constants import DEFAULT_CATEGORY
 
 def plot_diffusion_training(reward_buffer, actor_loss_log, critic_loss_log, best_reward_log, 
                           value_prediction_log, return_log, log_prob_log=None, final_episode=None, 
-                          category=DEFAULT_CATEGORY, timestamp=None):
+                          category=DEFAULT_CATEGORY, timestamp=None, training_mode=None):
     """Plotting function adapted from vanilla PPO but for diffusion metrics"""
     
     # Determine the actual number of episodes run
@@ -36,9 +36,16 @@ def plot_diffusion_training(reward_buffer, actor_loss_log, critic_loss_log, best
     if len(actor_loss_log) > 0:
         loss_x_points = np.linspace(0, num_episodes, len(actor_loss_log))
         
-        axs[0, 1].plot(loss_x_points, actor_loss_log, label="UNet Loss", linewidth=2, marker='o', markersize=3)
+        # Mode-aware actor loss label
+        actor_label = "LoRA Loss" if training_mode == "LORA_UNET" else "Diversity Policy Loss"
+        if training_mode is None:
+            actor_label = "Actor Loss"  # Fallback for backward compatibility
+            
+        axs[0, 1].plot(loss_x_points, actor_loss_log, label=actor_label, linewidth=2, marker='o', markersize=3)
         axs[0, 1].plot(loss_x_points, critic_loss_log, label="Value Loss", linewidth=2, marker='s', markersize=3)
-        axs[0, 1].set_title(f"Loss per Update ({len(actor_loss_log)} updates)")
+        # Mode-aware title
+        mode_suffix = f" ({training_mode})" if training_mode else ""
+        axs[0, 1].set_title(f"Loss per Update ({len(actor_loss_log)} updates){mode_suffix}")
         axs[0, 1].set_xlabel("Episode")
         axs[0, 1].set_ylabel("Loss")
         axs[0, 1].legend()
@@ -52,13 +59,19 @@ def plot_diffusion_training(reward_buffer, actor_loss_log, critic_loss_log, best
     else:
         axs[0, 1].text(0.5, 0.5, "No Loss Data\n(No updates performed yet)", 
                       ha='center', va='center', transform=axs[0, 1].transAxes, fontsize=12)
-        axs[0, 1].set_title("Loss per Update")
+        mode_suffix = f" ({training_mode})" if training_mode else ""
+        axs[0, 1].set_title(f"Loss per Update{mode_suffix}")
 
     # Log Probability Progress (if available)
     if log_prob_log and len(log_prob_log) > 0:
         # Show log probability trend over time
         log_prob_episodes = np.linspace(0, num_episodes, len(log_prob_log))
-        axs[0, 2].plot(log_prob_episodes, log_prob_log, label="Log Probability", alpha=0.6)
+        # Mode-aware log probability label
+        log_prob_label = "Denoising Log Prob" if training_mode == "LORA_UNET" else "Policy Log Prob"
+        if training_mode is None:
+            log_prob_label = "Log Probability"  # Fallback
+            
+        axs[0, 2].plot(log_prob_episodes, log_prob_log, label=log_prob_label, alpha=0.6)
         
         # Add smoothed version if enough data
         if len(log_prob_log) > 20:
@@ -67,7 +80,12 @@ def plot_diffusion_training(reward_buffer, actor_loss_log, critic_loss_log, best
             smoothed_episodes = np.linspace(window-1, num_episodes, len(smoothed_log_prob))
             axs[0, 2].plot(smoothed_episodes, smoothed_log_prob, label="Smoothed Log Prob", linewidth=2)
         
-        axs[0, 2].set_title("Log Probability Progress")
+        # Mode-aware log probability title
+        log_prob_title = "Denoising Log Probability" if training_mode == "LORA_UNET" else "Policy Log Probability"
+        if training_mode is None:
+            log_prob_title = "Log Probability Progress"  # Fallback
+            
+        axs[0, 2].set_title(log_prob_title)
         axs[0, 2].set_xlabel("Episode")
         axs[0, 2].set_ylabel("Log Probability")
         axs[0, 2].legend()
@@ -82,7 +100,12 @@ def plot_diffusion_training(reward_buffer, actor_loss_log, critic_loss_log, best
     else:
         # Fallback to best reward progress
         axs[0, 2].plot(episode_range, best_reward_log[:num_episodes], label="Best Diversity Reward", linewidth=2)
-        axs[0, 2].set_title("Best Diversity Reward Progress")
+        # Mode-aware fallback title  
+        fallback_title = "Best Reward Progress" if training_mode == "LORA_UNET" else "Best Diversity Reward Progress"
+        if training_mode is None:
+            fallback_title = "Best Diversity Reward Progress"  # Fallback
+            
+        axs[0, 2].set_title(fallback_title)
         axs[0, 2].set_xlabel("Episode")
         axs[0, 2].set_ylabel("Best Diversity Reward")
         axs[0, 2].legend()
@@ -185,7 +208,7 @@ def plot_diffusion_training(reward_buffer, actor_loss_log, critic_loss_log, best
 
 
 def plot_from_csv(training_timestamp: str, category: str = DEFAULT_CATEGORY):
-    """Create plots from saved CSV data"""
+    """Create plots from saved CSV data with automatic training mode detection"""
     
     data = load_training_data(training_timestamp, category)
     if not data:
@@ -198,12 +221,34 @@ def plot_from_csv(training_timestamp: str, category: str = DEFAULT_CATEGORY):
     gradients_df = data.get('gradients')
     log_prob_df = data.get('log_probabilities')
     
+    # Try to detect training mode from metadata or filename
+    training_mode = None
+    metadata_df = data.get('metadata')
+    
+    # Handle both dict and DataFrame cases for metadata
+    if metadata_df is not None:
+        if isinstance(metadata_df, dict):
+            training_mode = metadata_df.get('training_mode')
+        elif hasattr(metadata_df, 'columns') and 'training_mode' in metadata_df.columns:
+            training_mode = metadata_df['training_mode'].iloc[0] if len(metadata_df) > 0 else None
+    
+    # Fallback: detect from log directory name
+    if training_mode is None:
+        if "lora" in training_timestamp.lower() or "LORA" in training_timestamp:
+            training_mode = "LORA_UNET"
+        else:
+            training_mode = "DIVERSITY_POLICY"  # Default assumption
+    
+    print(f"📊 Detected training mode: {training_mode}")
+    
     if episodes_df is None:
         print("❌ No episode data to plot")
         return
     
-    # Create 3x3 subplot layout to include log probabilities
+    # Create 3x3 subplot layout to include log probabilities (mode-aware)
+    mode_suffix = f" ({training_mode})" if training_mode else ""
     fig, axes = plt.subplots(3, 3, figsize=(18, 15))
+    fig.suptitle(f'Training Progress from CSV{mode_suffix}', fontsize=16, y=0.98)
     
     # Episode rewards
     axes[0, 0].plot(episodes_df['episode'], episodes_df['avg_reward'], alpha=0.6, label='Avg Reward')

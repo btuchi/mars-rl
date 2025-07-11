@@ -174,7 +174,7 @@ class DiffusionPolicyNetwork(nn.Module):
         print("🔧 Setting up LoRA UNet mode...")
         
         try:
-            from peft import LoraConfig, get_peft_model, TaskType
+            from peft import LoraConfig, get_peft_model
             print("✅ PEFT library loaded successfully")
         except ImportError:
             print("❌ PEFT library not found. Install with: pip install peft")
@@ -198,7 +198,7 @@ class DiffusionPolicyNetwork(nn.Module):
             target_modules=target_modules,
             lora_dropout=0.1,  # Dropout for LoRA layers
             bias="none",  # Don't adapt bias terms
-            task_type=TaskType.DIFFUSION,  # Specify diffusion task type
+            # task_type removed - not needed for diffusion models
         )
         
         # Apply LoRA to UNet
