@@ -193,9 +193,9 @@ class DiffusionPolicyNetwork(nn.Module):
         ]
         
         lora_config = LoraConfig(
-            r=16,  # Rank of adaptation - balance between expressiveness and efficiency
-            lora_alpha=32,  # LoRA scaling parameter
-            target_modules=target_modules,
+            r=4,  # Rank of adaptation - balance between expressiveness and efficiency
+            lora_alpha=8,  # LoRA scaling parameter
+            target_modules=["to_q", "to_v"], # Target only query and value projections
             lora_dropout=0.1,  # Dropout for LoRA layers
             bias="none",  # Don't adapt bias terms
             # task_type removed - not needed for diffusion models

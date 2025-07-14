@@ -1,6 +1,7 @@
 """Centralized logging functionality (cleaned up from diffusion_log_utils.py)"""
 
 import pandas as pd
+import numpy as np
 import os
 import time
 import signal
@@ -41,6 +42,7 @@ class TrainingLogger:
         self.gradient_csv = self.logs_dir / "gradient_log.csv"
         self.metadata_csv = self.logs_dir / "metadata.csv"
         self.log_prob_csv = self.logs_dir / "log_probabilities.csv"
+        self.features_csv = self.logs_dir / "generated_features.csv"
         
         # Initialize metadata
         self.metadata = {
@@ -64,6 +66,7 @@ class TrainingLogger:
         self.value_prediction_data = []
         self.gradient_data = []
         self.log_prob_data = []
+        self.feature_data = []
         
         # Auto-save frequency
         self.save_frequency = LOG_SAVE_FREQUENCY
@@ -149,6 +152,28 @@ class TrainingLogger:
         # Auto-save every 10 entries
         if len(self.log_prob_data) % 10 == 0:
             self.save_log_probabilities()
+    
+    def log_generated_features(self, features: np.ndarray, episode: int, prompt: str):
+        """Log generated features for t-SNE visualization"""
+        
+        # features shape: (batch_size, feature_dim)
+        for i, feature_vector in enumerate(features):
+            feature_entry = {
+                'episode': episode,
+                'trajectory_idx': i,
+                'prompt': prompt,
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Add each feature dimension as a separate column
+            for j, feature_val in enumerate(feature_vector):
+                feature_entry[f'feature_{j:03d}'] = float(feature_val)
+            
+            self.feature_data.append(feature_entry)
+        
+        # Auto-save every 20 entries (since each episode generates multiple features)
+        if len(self.feature_data) % 20 == 0:
+            self.save_generated_features()
     
     def log_gradient_info(self, update_num: int, episode: int, gradient_info: dict):
         """Log gradient information"""
@@ -245,6 +270,16 @@ class TrainingLogger:
         except Exception as e:
             print(f"⚠️ Error saving log probabilities: {e}")
     
+    def save_generated_features(self):
+        """Save generated features to CSV"""
+        try:
+            if self.feature_data:
+                df = pd.DataFrame(self.feature_data)
+                df.to_csv(self.features_csv, index=False)
+                print(f"💾 Generated features saved: {len(self.feature_data)} entries")
+        except Exception as e:
+            print(f"⚠️ Error saving generated features: {e}")
+    
     def save_episode_log(self):
         """Save episode data to CSV"""
         try:
@@ -300,6 +335,7 @@ class TrainingLogger:
         self.save_value_predictions()
         self.save_returns()
         self.save_log_probabilities()
+        self.save_generated_features()
         
         if final:
             print(f"📊 Final logs saved to: {self.logs_dir}")
@@ -375,6 +411,11 @@ def log_log_probability(log_prob: float, episode: int, trajectory_idx: int = 0):
     """Log log probability (convenient wrapper)"""
     if _logger:
         _logger.log_log_probability(log_prob, episode, trajectory_idx)
+
+def log_generated_features(features, episode: int, prompt: str):
+    """Log generated features (convenient wrapper)"""
+    if _logger:
+        _logger.log_generated_features(features, episode, prompt)
 
 def finalize_logging():
     """Complete logging and save final files"""

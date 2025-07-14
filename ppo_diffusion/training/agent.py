@@ -24,7 +24,7 @@ from .memory import DiffusionReplayMemory
 from .rewards import DiffusionRewardFunction
 from ..utils.device import clear_gpu_cache
 from ..utils.constants import *
-from ..utils.logging import log_log_probability
+from ..utils.logging import log_log_probability, log_generated_features
 
 
 class DiffusionPPOAgent:
@@ -33,7 +33,7 @@ class DiffusionPPOAgent:
     def __init__(self, sampler: DiffusionSampler, ref_features: np.ndarray, batch_size: int, 
                  feature_dim: int = 512, num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
                  images_per_prompt: int = DEFAULT_IMAGES_PER_PROMPT, 
-                 save_samples: bool = True, training_start: str = None):
+                 save_samples: bool = True, training_start: str = None, ref_images: np.ndarray = None):
         
         self.dtype = sampler.dtype if hasattr(sampler, 'dtype') else torch.float32
         self.device = sampler.device
@@ -77,7 +77,12 @@ class DiffusionPPOAgent:
         # Components
         self.replay_buffer = DiffusionReplayMemory(batch_size)
         # Use configurable reward metric from constants
-        self.reward_function = DiffusionRewardFunction(ref_features, self.feature_extractor, reward_metric=DEFAULT_REWARD_METRIC)
+        self.reward_function = DiffusionRewardFunction(
+            ref_features, 
+            self.feature_extractor, 
+            reward_metric=DEFAULT_REWARD_METRIC,
+            ref_images=ref_images
+        )
 
         # Image saving parameters
         self.save_size = (64, 64)
@@ -249,6 +254,17 @@ class DiffusionPPOAgent:
         # Calculate individual diversity rewards
         individual_rewards = self.reward_function.calculate_batch_rewards(trajectories, prompt)
         avg_reward = np.mean(individual_rewards)
+        
+        # Log generated features for t-SNE visualization  
+        if episode is not None:
+            # Extract features from all trajectories for logging
+            batch_features = []
+            for trajectory in trajectories:
+                features = self.feature_extractor.extract_trajectory_features(trajectory)
+                batch_features.append(features)
+            
+            batch_features_array = np.vstack([f.reshape(1, -1) for f in batch_features])
+            log_generated_features(batch_features_array, episode, prompt)
         
         print(f"  Individual rewards: {individual_rewards}")
         print(f"  Average reward: {avg_reward:.4f}")
@@ -501,21 +517,23 @@ class DiffusionPPOAgent:
                 if self.actor.training_mode == "DIVERSITY_POLICY":
                     torch.nn.utils.clip_grad_norm_(self.actor.diversity_policy.parameters(), max_norm=0.5)
                     clip_params = list(self.actor.diversity_policy.parameters())
+                    
+                    # Calculate gradient norm AFTER clipping  
+                    actor_grad_norm_after = 0
+                    for param in clip_params:
+                        if param.grad is not None:
+                            actor_grad_norm_after += param.grad.data.norm(2).item() ** 2
+                    actor_grad_norm_after = actor_grad_norm_after ** 0.5
+                    
+                    print(f"🔍 Actor gradient norm: {actor_grad_norm_before:.6f} → {actor_grad_norm_after:.6f} (clipped: {actor_grad_norm_before > 1.0})")
+                    
                 elif self.actor.training_mode == "LORA_UNET":
-                    lora_params = list(filter(lambda p: p.requires_grad, self.actor.unet.parameters()))
-                    torch.nn.utils.clip_grad_norm_(lora_params, max_norm=0.5)
-                    clip_params = lora_params
+                    # No gradient clipping for LoRA - let the conservative config handle stability
+                    actor_grad_norm_after = actor_grad_norm_before  # Same as before since no clipping
+                    print(f"🔍 LoRA gradient norm: {actor_grad_norm_before:.6f} (no clipping)")
                 else:
-                    clip_params = []
-
-                # Calculate gradient norm AFTER clipping  
-                actor_grad_norm_after = 0
-                for param in clip_params:
-                    if param.grad is not None:
-                        actor_grad_norm_after += param.grad.data.norm(2).item() ** 2
-                actor_grad_norm_after = actor_grad_norm_after ** 0.5
-
-                print(f"🔍 Actor gradient norm: {actor_grad_norm_before:.6f} → {actor_grad_norm_after:.6f} (clipped: {actor_grad_norm_before > 1.0})")
+                    actor_grad_norm_after = actor_grad_norm_before  # Same as before since no clipping
+                    print(f"🔍 Actor gradient norm: {actor_grad_norm_before:.6f}")
                 
                 self.actor_optimizer.step()
 

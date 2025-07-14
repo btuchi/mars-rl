@@ -589,3 +589,129 @@ def load_training_data(training_timestamp: str, category: str = DEFAULT_CATEGORY
     except Exception as e:
         print(f"❌ Error loading training data: {e}")
         return None
+
+
+def plot_feature_distributions(training_timestamp: str, category: str = DEFAULT_CATEGORY):
+    """
+    Create t-SNE plots for reference vs generated feature distributions
+    Saves side-by-side comparison plots to outputs/plots/feature_distribution/{timestamp}/
+    """
+    try:
+        from sklearn.manifold import TSNE
+        from sklearn.preprocessing import StandardScaler
+    except ImportError:
+        print("❌ Error: scikit-learn required for t-SNE plots")
+        print("💡 Install with: pip install scikit-learn")
+        return False
+    
+    current_path = Path(__file__).parent.parent
+    
+    # Load generated features from CSV
+    logs_dir = current_path / "outputs" / "logs" / f"{category}_{training_timestamp}"
+    features_csv = logs_dir / "generated_features.csv"
+    
+    if not features_csv.exists():
+        print(f"❌ Generated features not found: {features_csv}")
+        print("💡 Features are logged during training - run a training session first")
+        return False
+    
+    # Load reference features from NPZ
+    ref_features_npz = current_path / "reference_features" / f"reference_{category}_features_v2.npz"
+    if not ref_features_npz.exists():
+        print(f"❌ Reference features not found: {ref_features_npz}")
+        return False
+    
+    print(f"📊 Loading feature data for t-SNE visualization...")
+    
+    # Load generated features
+    gen_df = pd.read_csv(features_csv)
+    feature_cols = [col for col in gen_df.columns if col.startswith('feature_')]
+    
+    if not feature_cols:
+        print(f"❌ No feature columns found in {features_csv}")
+        return False
+    
+    gen_features = gen_df[feature_cols].values
+    print(f"📊 Loaded {len(gen_features)} generated feature vectors")
+    
+    # Load reference features  
+    ref_npz = np.load(ref_features_npz)
+    ref_features_list = []
+    for key in ref_npz.keys():
+        ref_features_list.append(ref_npz[key])
+    ref_features = np.stack(ref_features_list)
+    ref_npz.close()
+    print(f"📊 Loaded {len(ref_features)} reference feature vectors")
+    
+    # Combine features for t-SNE
+    all_features = np.vstack([ref_features, gen_features])
+    labels = ['Reference'] * len(ref_features) + ['Generated'] * len(gen_features)
+    
+    # Standardize features
+    scaler = StandardScaler()
+    all_features_scaled = scaler.fit_transform(all_features)
+    
+    print(f"🔄 Running t-SNE on {len(all_features)} feature vectors...")
+    
+    # Run t-SNE
+    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(all_features)//4))
+    features_2d = tsne.fit_transform(all_features_scaled)
+    
+    # Split back into reference and generated
+    ref_2d = features_2d[:len(ref_features)]
+    gen_2d = features_2d[len(ref_features):]
+    
+    # Create plots directory
+    plots_dir = current_path / "outputs" / "plots" / "feature_distribution" / training_timestamp
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create side-by-side plots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # Plot 1: Reference features
+    ax1.scatter(ref_2d[:, 0], ref_2d[:, 1], c='blue', alpha=0.6, s=20, label=f'Reference (n={len(ref_features)})')
+    ax1.set_title(f'Reference Feature Distribution\n{category.title()} Category')
+    ax1.set_xlabel('t-SNE Dimension 1')
+    ax1.set_ylabel('t-SNE Dimension 2')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Generated features
+    ax2.scatter(gen_2d[:, 0], gen_2d[:, 1], c='red', alpha=0.6, s=20, label=f'Generated (n={len(gen_features)})')
+    ax2.set_title(f'Generated Feature Distribution\nTraining: {training_timestamp}')
+    ax2.set_xlabel('t-SNE Dimension 1')
+    ax2.set_ylabel('t-SNE Dimension 2')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    plot_path = plots_dir / f"feature_distribution_comparison_{category}_{training_timestamp}.png"
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"✅ Feature distribution plot saved: {plot_path}")
+    
+    # Also create combined overlay plot
+    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+    
+    ax.scatter(ref_2d[:, 0], ref_2d[:, 1], c='blue', alpha=0.6, s=30, label=f'Reference (n={len(ref_features)})')
+    ax.scatter(gen_2d[:, 0], gen_2d[:, 1], c='red', alpha=0.6, s=30, label=f'Generated (n={len(gen_features)})')
+    
+    ax.set_title(f'Feature Distribution Comparison\n{category.title()} - {training_timestamp}')
+    ax.set_xlabel('t-SNE Dimension 1')
+    ax.set_ylabel('t-SNE Dimension 2')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save overlay plot
+    overlay_path = plots_dir / f"feature_distribution_overlay_{category}_{training_timestamp}.png"
+    plt.savefig(overlay_path, dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"✅ Feature distribution overlay saved: {overlay_path}")
+    
+    return True

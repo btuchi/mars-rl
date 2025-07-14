@@ -17,15 +17,27 @@ class DiffusionRewardFunction:
     Returns:
         Individual diversity rewards for each trajectory
     """
-    def __init__(self, ref_features: np.ndarray, feature_extractor: FeatureExtractor, buffer_size: int = 50, reward_metric: str = "MMD"):
+    def __init__(self, ref_features: np.ndarray, feature_extractor: FeatureExtractor, buffer_size: int = 50, reward_metric: str = "MMD", ref_images: np.ndarray = None):
         self.ref_features = ref_features
+        self.ref_images = ref_images  # Reference images for MI calculation
         self.buffer_size = buffer_size
         self.reward_history = []
         self.feature_extractor = feature_extractor
         
+        # Check if we have reference images when needed
+        if reward_metric in ["MI", "MMD_MI"] and ref_images is None:
+            print("⚠️ Warning: MI-based metrics need reference images, but none provided!")
+            print("⚠️ You may need to modify agent initialization to pass reference images.")
+        
         # Configurable reward metric system
         self.reward_metric_name = reward_metric
-        self.reward_metric = get_reward_metric(reward_metric)
+        
+        # Pass weights for MMD_MI metric
+        if reward_metric == "MMD_MI":
+            from ..utils.constants import MMD_WEIGHT, MI_WEIGHT
+            self.reward_metric = get_reward_metric(reward_metric, mmd_weight=MMD_WEIGHT, mi_weight=MI_WEIGHT)
+        else:
+            self.reward_metric = get_reward_metric(reward_metric)
         
         print(f"🎯 Using reward metric: {reward_metric}")
         print(f"🎯 Available metrics: {list_available_metrics()}")
@@ -33,33 +45,78 @@ class DiffusionRewardFunction:
     def calculate_batch_rewards(self, trajectories: List[DiffusionTrajectory], prompt: str) -> np.ndarray:
         """
         Calculate individual diversity rewards for a batch of trajectories
-        Uses pure visual diversity (ResNet-18 features) without text comparison
         Args:
             trajectories: List of diffusion trajectories
             prompt: Text prompt (unused in pure visual diversity approach)
         Returns:
             individual_rewards: Array of rewards for each trajectory
         """
-        # Extract visual features from all trajectories
-        batch_features = []
+        # Check if we need images (for MI) or features (for MMD)
+        needs_images = self.reward_metric_name in ["MI", "MMD_MI"]
+        
+        if needs_images:
+            # Extract raw images for MI calculation
+            batch_images = []
+            batch_features = []
+            
+            for trajectory in trajectories:
+                # Get raw image tensor (3, 512, 512)
+                image_tensor = trajectory.final_image.squeeze(0)  # Remove batch dim
+                # Convert to numpy (3, 512, 512) -> (512, 512, 3) for MI
+                image_np = image_tensor.permute(1, 2, 0).cpu().numpy()
+                batch_images.append(image_np)
+                
+                # Also extract features for MMD component (if MMD_MI)
+                if self.reward_metric_name == "MMD_MI":
+                    features = self.feature_extractor.extract_trajectory_features(trajectory)
+                    batch_features.append(features.reshape(1, -1))
+            
+            batch_images_array = np.stack(batch_images)  # (batch_size, 512, 512, 3)
+            
+            if self.reward_metric_name == "MMD_MI":
+                # For combined metric, pass both images and features
+                batch_features_array = np.vstack(batch_features)
+                # The MMD_MI metric will handle calling the right sub-metrics
+                individual_rewards = self.reward_metric.calculate_rewards(
+                    batch_features_array,  # For MMD component
+                    self.ref_features,     # Reference features for MMD
+                    gamma=None,
+                    images=batch_images_array,  # For MI component
+                    ref_images=self.ref_images  # Reference images for MI
+                )
+            else:
+                # Pure MI - pass images
+                individual_rewards = self.reward_metric.calculate_rewards(
+                    batch_images_array,
+                    self.ref_images,  # Need reference images for MI
+                    gamma=None
+                )
+        else:
+            # Extract visual features for MMD/other feature-based metrics
+            batch_features = []
+            
+            for trajectory in trajectories:
+                # Extract ResNet-18 features from final image
+                features = self.feature_extractor.extract_trajectory_features(trajectory)
+                batch_features.append(features.reshape(1, -1))
 
-        for trajectory in trajectories:
-            # Extract ResNet-18 features from final image
-            features = self.feature_extractor.extract_trajectory_features(trajectory)
-            batch_features.append(features.reshape(1, -1))
+            # Stack into single np array (batch_size x feature_dim)
+            batch_features_array = np.vstack(batch_features)
+            
+            # Log generated features for t-SNE visualization
+            from ..utils.logging import log_generated_features
+            # We need episode and prompt info - let's get it from the caller context
+            # For now, we'll add this logging at the agent level instead
+            
+            # Calculate rewards using selected metric
+            individual_rewards = self.reward_metric.calculate_rewards(
+                batch_features_array,
+                self.ref_features,
+                gamma=None  # Auto-set gamma
+            )
 
-        # batch_features = [traj_feat1, traj_feat2, traj_feat3, traj_feat4, ... traj_featM]
-        # traj_feat_i = [f1, f2, f3, .., fn] -> one final image
-        # Stack into single np array (batch_size x feature_dim)
-        batch_features_array = np.vstack(batch_features)
-
-        # PHASE 4: Calculate rewards using selected metric
+        # PHASE 4: Log reward computation
         print(f"🎯 [PHASE 4] Computing {self.reward_metric_name} rewards...")
-        individual_rewards = self.reward_metric.calculate_rewards(
-            batch_features_array,
-            self.ref_features,
-            gamma=None  # Auto-set gamma
-        )
 
         # Use diversity rewards from selected metric
         diversity_rewards = individual_rewards

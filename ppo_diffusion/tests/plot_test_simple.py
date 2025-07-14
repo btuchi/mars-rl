@@ -4,6 +4,7 @@
 import sys
 from pathlib import Path
 
+
 # Add the project root directory to sys.path
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
@@ -61,10 +62,24 @@ def main():
     print(f"📈 Plotting training data for: {category}_{most_recent_timestamp}")
     
     try:
-        # Import and call the existing visualization function
-        from ppo_diffusion.utils.visualization import plot_from_csv
+        # Import and call the existing visualization functions
+        from ppo_diffusion.utils.visualization import plot_from_csv, plot_feature_distributions
+        
+        # Generate training progress plots
+        print("📊 Generating training progress plots...")
         plot_from_csv(most_recent_timestamp, category)
-        print("✅ Plots generated successfully!")
+        
+        # Generate feature distribution plots
+        print("🎨 Generating feature distribution plots...")
+        success = plot_feature_distributions(most_recent_timestamp, category)
+        
+        if success:
+            print("✅ All plots generated successfully!")
+            print(f"📁 Training plots: outputs/plots/training/")
+            print(f"📁 Feature distribution plots: outputs/plots/feature_distribution/{most_recent_timestamp}/")
+        else:
+            print("✅ Training plots generated successfully!")
+            print("⚠️ Feature distribution plots failed (may need scikit-learn or more training data)")
         
     except Exception as e:
         print(f"❌ Error generating plots: {e}")

@@ -55,6 +55,30 @@ def main(category: str = DEFAULT_CATEGORY):
             print(f"Error loading reference features: {e}")
             return
         
+        # Load reference images for MI calculation
+        ref_images = None
+        if DEFAULT_REWARD_METRIC in ["MI", "MMD_MI"]:
+            try:
+                images_npz_data = np.load(current_path / "reference_features" / f"reference_{category}_images.npz")
+                images_keys = list(images_npz_data.keys())
+                
+                # Stack all individual images into a single array
+                ref_images_list = []
+                for key in images_keys:
+                    ref_images_list.append(images_npz_data[key])
+                
+                ref_images = np.stack(ref_images_list)
+                print(f"Loaded reference images: {ref_images.shape}")
+                images_npz_data.close()
+            except FileNotFoundError:
+                print(f"⚠️ Warning: Reference images not found for {DEFAULT_REWARD_METRIC} metric!")
+                print(f"⚠️ Expected: {current_path}/reference_features/reference_{category}_images.npz")
+                print(f"⚠️ Run: python create_reference_images_npz.py --category {category}")
+                print(f"⚠️ MI component will be disabled for MMD_MI metric")
+            except Exception as e:
+                print(f"⚠️ Warning: Error loading reference images: {e}")
+                print(f"⚠️ MI component will be disabled for MMD_MI metric")
+        
         # Initialize diffusion sampler
         print("Initializing diffusion sampler...")
         sampler = DiffusionSampler(device=device, use_fp16=False)
@@ -69,7 +93,8 @@ def main(category: str = DEFAULT_CATEGORY):
             feature_dim=feature_dim,
             num_inference_steps=DEFAULT_NUM_INFERENCE_STEPS,
             images_per_prompt=DEFAULT_IMAGES_PER_PROMPT,
-            training_start=timestamp
+            training_start=timestamp,
+            ref_images=ref_images
         )
         
         # Load prompts from prompts folder
@@ -215,6 +240,18 @@ def main(category: str = DEFAULT_CATEGORY):
         print(f"\n💾 Finalizing logs...")
         finalize_logging()
         plot_from_csv(timestamp, category)
+        
+        # Generate feature distribution plots
+        print(f"\n🎨 Generating feature distribution plots...")
+        try:
+            from .utils.visualization import plot_feature_distributions
+            success = plot_feature_distributions(timestamp, category)
+            if success:
+                print(f"✅ Feature distribution plots saved to: outputs/plots/feature_distribution/{timestamp}/")
+            else:
+                print(f"⚠️ Feature distribution plots failed - may need more training data or scikit-learn")
+        except Exception as e:
+            print(f"⚠️ Could not generate feature distribution plots: {e}")
 
 
 if __name__ == "__main__":
