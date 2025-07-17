@@ -211,15 +211,35 @@ class DiffusionPPOAgent:
             log_prob_tensors.append(log_prob_tensor)  # Keep gradient connection intact
             
             # Extract features from first trajectory for critic
+            # CRITICAL FIX: Detach features from actor computation graph to prevent critic contamination
             if i == 0:
-                first_image_features = self.feature_extractor.extract_trajectory_features(trajectory)
+                with torch.no_grad():  # Ensure no gradients flow through feature extraction
+                    # Create a detached copy of the image for feature extraction
+                    detached_image = trajectory.final_image.clone().detach()
+                    # Create a temporary trajectory with detached image
+                    from ..core.trajectory import DiffusionTrajectory
+                    detached_trajectory = DiffusionTrajectory(
+                        steps=[],  # Empty steps - we only need the final image
+                        final_image=detached_image,
+                        condition=trajectory.condition.clone().detach() if trajectory.condition is not None else None
+                    )
+                    first_image_features = self.feature_extractor.extract_trajectory_features(detached_trajectory)
             
             print(f"  Image {i+1}/{self.images_per_prompt} generated (log_prob: {log_prob_value:.6f})")
 
             # Save sample image if needed
             if should_save and i == 0:  # Save first image of batch
                 try:
-                    features = self.feature_extractor.extract_trajectory_features(trajectory)
+                    # CRITICAL FIX: Use detached features for sample evaluation too
+                    with torch.no_grad():
+                        detached_image = trajectory.final_image.clone().detach()
+                        from ..core.trajectory import DiffusionTrajectory
+                        detached_trajectory = DiffusionTrajectory(
+                            steps=[],
+                            final_image=detached_image,
+                            condition=trajectory.condition.clone().detach() if trajectory.condition is not None else None
+                        )
+                        features = self.feature_extractor.extract_trajectory_features(detached_trajectory)
                     features = features.reshape(1, -1)
                     # Use the reward function's current metric for sample evaluation
                     individual_reward = self.reward_function.reward_metric.calculate_rewards(
@@ -258,13 +278,28 @@ class DiffusionPPOAgent:
         # Log generated features for t-SNE visualization  
         if episode is not None:
             # Extract features from all trajectories for logging
+            # CRITICAL FIX: Use detached features for logging to prevent computation graph contamination
             batch_features = []
             for trajectory in trajectories:
-                features = self.feature_extractor.extract_trajectory_features(trajectory)
-                batch_features.append(features)
+                with torch.no_grad():
+                    detached_image = trajectory.final_image.clone().detach()
+                    from ..core.trajectory import DiffusionTrajectory
+                    detached_trajectory = DiffusionTrajectory(
+                        steps=[],
+                        final_image=detached_image,
+                        condition=trajectory.condition.clone().detach() if trajectory.condition is not None else None
+                    )
+                    features = self.feature_extractor.extract_trajectory_features(detached_trajectory)
+                    batch_features.append(features)
             
             batch_features_array = np.vstack([f.reshape(1, -1) for f in batch_features])
             log_generated_features(batch_features_array, episode, prompt)
+            
+            # Plot per-image feature distribution every 5 episodes
+            if episode % 5 == 0:
+                from ..utils.logging import plot_per_image_feature_distribution, plot_tsne_feature_space
+                plot_per_image_feature_distribution(batch_features_array, episode, prompt, self.training_start)
+                plot_tsne_feature_space(batch_features_array, episode, prompt, self.training_start)
         
         print(f"  Individual rewards: {individual_rewards}")
         print(f"  Average reward: {avg_reward:.4f}")
@@ -343,8 +378,18 @@ class DiffusionPPOAgent:
         print(f"🔍 Raw advantages (R-V): {memo_rewards - memo_values}")
 
         # Compute advantages using GAE
+        # Debug: Check for NaN values before GAE calculation
+        print(f"🔍 DEBUG GAE inputs:")
+        print(f"   memo_rewards: {memo_rewards} (has NaN: {np.isnan(memo_rewards).any()})")
+        print(f"   memo_values: {memo_values} (has NaN: {np.isnan(memo_values).any()})")
+        
         memo_advantages = self.compute_gae(memo_rewards, memo_values)
         memo_returns = memo_advantages + memo_values
+        
+        # Debug: Check for NaN values after GAE calculation
+        print(f"🔍 DEBUG GAE outputs:")
+        print(f"   memo_advantages: {memo_advantages} (has NaN: {np.isnan(memo_advantages).any()})")
+        print(f"   memo_returns: {memo_returns} (has NaN: {np.isnan(memo_returns).any()})")
 
         # Convert to tensors
         memo_features_tensor = torch.from_numpy(np.array(memo_features)).to(
@@ -379,11 +424,10 @@ class DiffusionPPOAgent:
 
                     # Generate FRESH trajectory with current policy
                     _, fresh_log_prob = self.actor.select_trajectory(prompt)
-                    print(f"🔍 DEBUG: fresh_log_prob requires_grad={fresh_log_prob.requires_grad}, value={fresh_log_prob.item():.6f}")
+                    
                     current_log_probs.append(fresh_log_prob)
 
                 current_log_probs_tensor = torch.stack(current_log_probs)
-                print(f"🔍 DEBUG: current_log_probs_tensor requires_grad={current_log_probs_tensor.requires_grad}, shape={current_log_probs_tensor.shape}")
                 old_log_probs_batch = torch.tensor([memo_log_probs[idx] for idx in batch], 
                                           dtype=self.dtype, device=self.device)
     
@@ -395,8 +439,6 @@ class DiffusionPPOAgent:
                 ratio_max = ratio.max().item()
                 ratio_min = ratio.min().item()
                 
-                print(f"🔍 Ratio stats: mean={ratio_mean:.3f}, min={ratio_min:.3f}, max={ratio_max:.3f}")
-                
                 # Batch advantages with normalization
                 batch_advantages = memo_advantages_tensor[batch]
                 
@@ -406,35 +448,37 @@ class DiffusionPPOAgent:
                     advantage_std = batch_advantages.std()
                     if advantage_std > 1e-8:  # Avoid division by zero
                         batch_advantages = (batch_advantages - advantage_mean) / (advantage_std + 1e-8)
-                        print(f"🔍 Advantages normalized: mean={advantage_mean:.4f}, std={advantage_std:.4f}")
-                    else:
-                        print(f"🔍 Advantages not normalized (std too small): mean={advantage_mean:.4f}, std={advantage_std:.4f}")
-                else:
-                    print(f"🔍 Single advantage, no normalization: {batch_advantages.item():.4f}")
-                
-                print("Batch advantages (after norm) mean:", batch_advantages.mean().item())
                 
                 # PPO clipped objective
                 surr1 = ratio * batch_advantages
                 surr2 = torch.clamp(ratio, 1 - self.EPSILON_CLIP, 1 + self.EPSILON_CLIP) * batch_advantages
 
-                print("surr1 mean:", surr1.mean().item())
-                print("surr2 mean:", surr2.mean().item())
-                
                 # Actor loss
                 actor_loss = -torch.min(surr1, surr2).mean()
-                print(f"🔍 DEBUG: actor_loss requires_grad={actor_loss.requires_grad}, value={actor_loss.item():.6f}")
                 
                 # Critic loss
-                batch_values = self.critic(memo_features_tensor[batch]).squeeze()
+                batch_values = self.critic(memo_features_tensor[batch])
                 batch_returns = memo_returns_tensor[batch]
 
+                # Ensure consistent shapes without squeezing away batch dimension
+                if batch_values.dim() > 1:
+                    batch_values = batch_values.squeeze(-1)  # Only squeeze last dimension
+                if batch_returns.dim() == 0:
+                    batch_returns = batch_returns.unsqueeze(0)  # Add batch dimension if missing
+                
                 batch_values = batch_values.to(self.dtype)
                 batch_returns = batch_returns.to(self.dtype)
                 
-                critic_loss = nn.MSELoss()(batch_values, batch_returns)
+                # Debug critic inputs before loss calculation
+                print(f"🔍 CRITIC DEBUG:")
+                print(f"   batch_values: {batch_values} (has NaN: {torch.isnan(batch_values).any()})")
+                print(f"   batch_returns: {batch_returns} (has NaN: {torch.isnan(batch_returns).any()})")
+                print(f"   batch_values shape: {batch_values.shape}, batch_returns shape: {batch_returns.shape}")
                 
-                # Store losses
+                critic_loss = nn.MSELoss()(batch_values, batch_returns)
+                print(f"🔍 CRITIC LOSS: {critic_loss} (has NaN: {torch.isnan(critic_loss)})")
+                
+                # Store losses (will update critic loss after isolated computation)
                 all_actor_losses.append(actor_loss.item())
                 all_critic_losses.append(critic_loss.item())
                 
@@ -454,6 +498,13 @@ class DiffusionPPOAgent:
                     print(f"🔍 [PHASE 1] Actor loss value: {actor_loss.item()}")
                     print(f"🔍 [PHASE 1] Actor loss shape: {actor_loss.shape}")
                     raise e
+                
+                # CRITICAL FIX: Clear computation graph after actor backward to prevent critic contamination
+                # Force garbage collection to ensure no shared state remains
+                # import gc
+                # torch.cuda.empty_cache()
+                # gc.collect()
+
 
                 # Calculate gradient norm BEFORE clipping
                 actor_grad_norm_before = 0
@@ -466,6 +517,8 @@ class DiffusionPPOAgent:
                     trainable_params = self.actor.diversity_policy.parameters()
                 elif self.actor.training_mode == "LORA_UNET":
                     trainable_params = list(filter(lambda p: p.requires_grad, self.actor.unet.parameters()))
+                elif self.actor.training_mode == "SCHEDULER_POLICY":
+                    trainable_params = self.actor.scheduler_policy.parameters()
                 else:
                     trainable_params = []
                 
@@ -527,6 +580,19 @@ class DiffusionPPOAgent:
                     
                     print(f"🔍 Actor gradient norm: {actor_grad_norm_before:.6f} → {actor_grad_norm_after:.6f} (clipped: {actor_grad_norm_before > 1.0})")
                     
+                elif self.actor.training_mode == "SCHEDULER_POLICY":
+                    torch.nn.utils.clip_grad_norm_(self.actor.scheduler_policy.parameters(), max_norm=0.5)
+                    clip_params = list(self.actor.scheduler_policy.parameters())
+                    
+                    # Calculate gradient norm AFTER clipping  
+                    actor_grad_norm_after = 0
+                    for param in clip_params:
+                        if param.grad is not None:
+                            actor_grad_norm_after += param.grad.data.norm(2).item() ** 2
+                    actor_grad_norm_after = actor_grad_norm_after ** 0.5
+                    
+                    print(f"🔍 Scheduler gradient norm: {actor_grad_norm_before:.6f} → {actor_grad_norm_after:.6f} (clipped: {actor_grad_norm_before > 1.0})")
+                    
                 elif self.actor.training_mode == "LORA_UNET":
                     # No gradient clipping for LoRA - let the conservative config handle stability
                     actor_grad_norm_after = actor_grad_norm_before  # Same as before since no clipping
@@ -537,18 +603,27 @@ class DiffusionPPOAgent:
                 
                 self.actor_optimizer.step()
 
-                # Update critic
+                # Update critic - completely isolated from actor
                 self.critic_optimizer.zero_grad()
+                
+                # TEMP FIX: Restore normal critic training to test gradient flow
+                # Use regular critic loss computation (not isolated) to restore gradients
+                critic_loss_for_backward = nn.MSELoss()(batch_values, batch_returns)
+                
+                print(f"🔍 CRITIC LOSS FOR BACKWARD: {critic_loss_for_backward} (has NaN: {torch.isnan(critic_loss_for_backward)})")
+                
+                # Update the stored critic loss
+                all_critic_losses[-1] = critic_loss_for_backward.item()
                 
                 # PHASE 1: Enhanced gradient anomaly detection for critic
                 print("🔍 [PHASE 1] Starting critic backward pass with anomaly detection...")
                 try:
-                    critic_loss.backward()
+                    critic_loss_for_backward.backward()
                     print("🔍 [PHASE 1] ✅ Critic backward pass completed successfully")
                 except RuntimeError as e:
                     print(f"🔍 [PHASE 1] ❌ GRADIENT ANOMALY DETECTED in critic backward pass: {e}")
-                    print(f"🔍 [PHASE 1] Critic loss value: {critic_loss.item()}")
-                    print(f"🔍 [PHASE 1] Critic loss shape: {critic_loss.shape}")
+                    print(f"🔍 [PHASE 1] Critic loss value: {critic_loss_for_backward.item()}")
+                    print(f"🔍 [PHASE 1] Critic loss shape: {critic_loss_for_backward.shape}")
                     raise e
 
                 total_norm = 0
@@ -610,6 +685,15 @@ class DiffusionPPOAgent:
             
             # Clear buffer
             self.replay_buffer.clear_memo()
+            
+            # IMPORTANT: Clear gradients after PPO update to prevent memory accumulation
+            # This is especially critical for LoRA training
+            # self.actor.clear_gradients()
+            # if hasattr(self.critic, 'zero_grad'):
+            #     self.critic.zero_grad()
+            
+            # Clear GPU cache after gradient clearing
+            # clear_gpu_cache()
             
             # Return additional gradient info for logging (you can enhance this)
             gradient_info = {

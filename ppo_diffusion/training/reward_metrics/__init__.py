@@ -7,6 +7,7 @@ from typing import Optional
 
 from .mi import calculate_individual_mi_rewards
 from .mmd import calculate_individual_mmd_rewards
+from .fid import calculate_fid_batch_rewards
 
 class RewardMetric:
     """Base class for reward metrics"""
@@ -49,17 +50,40 @@ class MIRewardMetric(RewardMetric):
         )
 
 class FIDRewardMetric(RewardMetric):
-    """Fréchet Inception Distance reward metric (placeholder for future)"""
+    """Fréchet Inception Distance reward metric using pytorch-fid"""
     
-    def __init__(self):
+    def __init__(self, reward_scale: float = 0.1):
         super().__init__("FID")
+        self.reward_scale = reward_scale
+        print(f"🎯 FID reward metric initialized with scale={reward_scale}")
     
-    def calculate_rewards(self, generated_features: np.ndarray, 
-                         reference_features: np.ndarray, 
-                         **kwargs) -> np.ndarray:
-        """Calculate FID-based rewards (TODO: implement)"""
-        print("FID reward metric not implemented yet")
-        return np.zeros(len(generated_features))
+    def calculate_rewards(self, generated_images: np.ndarray, 
+                         reference_images: np.ndarray, 
+                         device: str = 'cuda', **kwargs) -> np.ndarray:
+        """
+        Calculate FID-based rewards for generated images
+        
+        Args:
+            generated_images: numpy array [batch_size, H, W, C] in range [0, 1]
+            reference_images: numpy array [n_ref, H, W, C] in range [0, 1]
+            device: device for computation
+        """
+        import torch
+        
+        # Convert numpy arrays to torch tensors and adjust dimensions
+        # From (batch, H, W, C) to (batch, C, H, W)
+        gen_tensors = torch.from_numpy(generated_images).permute(0, 3, 1, 2).float()
+        ref_tensors = torch.from_numpy(reference_images).permute(0, 3, 1, 2).float()
+        
+        # Calculate FID rewards using our implementation
+        individual_rewards, avg_reward, fid_scores = calculate_fid_batch_rewards(
+            gen_tensors, ref_tensors, reward_scale=self.reward_scale, device=device
+        )
+        
+        print(f"🎯 FID scores: [{fid_scores.min():.4f}, {fid_scores.max():.4f}]")
+        print(f"🎯 FID rewards: [{individual_rewards.min():.4f}, {individual_rewards.max():.4f}]")
+        
+        return individual_rewards
 
 class LPIPSRewardMetric(RewardMetric):
     """Learned Perceptual Image Patch Similarity reward metric (placeholder)"""

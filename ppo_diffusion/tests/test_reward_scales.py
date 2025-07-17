@@ -27,7 +27,7 @@ def test_reward_scales(category: str = "crater", num_samples: int = 20):
     try:
         # Import reward metrics
         sys.path.insert(0, str(project_root))
-        from training.reward_metrics import MMDRewardMetric, MIRewardMetric
+        from training.reward_metrics import MMDRewardMetric, MIRewardMetric, FIDRewardMetric
         
         # Load reference data
         current_path = Path(__file__).parent.parent
@@ -67,6 +67,15 @@ def test_reward_scales(category: str = "crater", num_samples: int = 20):
         mmd_metric = MMDRewardMetric()
         mi_metric = MIRewardMetric()
         
+        # Test FID if pytorch-fid is available
+        fid_metric = None
+        try:
+            fid_metric = FIDRewardMetric(reward_scale=0.1)
+            print("🎯 FID metric initialized for testing")
+        except Exception as e:
+            print(f"⚠️ FID metric not available: {e}")
+            print("💡 Install pytorch-fid to test FID scaling: pip install pytorch-fid")
+        
         # Generate synthetic test data
         print(f"\n🧪 Generating {num_samples} synthetic samples for testing...")
         
@@ -79,10 +88,13 @@ def test_reward_scales(category: str = "crater", num_samples: int = 20):
         }
         
         test_images_scenarios = {
-            "Random Images": np.random.randint(0, 256, (num_samples, 512, 512, 3), dtype=np.uint8),
-            "Noisy Reference": np.clip(ref_images[:num_samples] + np.random.randint(-50, 50, (num_samples, 512, 512, 3)), 0, 255).astype(np.uint8),
-            "Similar Images": np.clip(ref_images[:num_samples] + np.random.randint(-10, 10, (num_samples, 512, 512, 3)), 0, 255).astype(np.uint8)
+            "Random Images": np.random.randint(0, 256, (num_samples, 512, 512, 3), dtype=np.uint8) / 255.0,
+            "Noisy Reference": np.clip(ref_images[:num_samples] + np.random.randint(-50, 50, (num_samples, 512, 512, 3)), 0, 255).astype(np.uint8) / 255.0,
+            "Similar Images": np.clip(ref_images[:num_samples] + np.random.randint(-10, 10, (num_samples, 512, 512, 3)), 0, 255).astype(np.uint8) / 255.0
         }
+        
+        # Convert reference images to [0,1] range for FID
+        ref_images_normalized = ref_images.astype(np.float32) / 255.0
         
         print("\n" + "="*60)
         print("MMD REWARD SCALE ANALYSIS (Feature-based)")
@@ -123,6 +135,40 @@ def test_reward_scales(category: str = "crater", num_samples: int = 20):
             except Exception as e:
                 print(f"   ❌ Error: {e}")
                 mi_results[scenario_name] = None
+        
+        # Test FID if available
+        if fid_metric is not None:
+            print("\n" + "="*60)
+            print("FID REWARD SCALE ANALYSIS (Image-based)")
+            print("="*60)
+            
+            fid_results = {}
+            device = 'cuda' if 'torch' in sys.modules and hasattr(sys.modules['torch'], 'cuda') and sys.modules['torch'].cuda.is_available() else 'cpu'
+            
+            # Test different FID reward scales
+            test_scales = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
+            
+            print(f"\n🔍 Testing FID with different reward scales (using 'Random Images' scenario)")
+            test_images = test_images_scenarios["Random Images"]
+            
+            try:
+                for scale in test_scales:
+                    print(f"\n   Testing scale {scale:.2f}:")
+                    fid_metric_test = FIDRewardMetric(reward_scale=scale)
+                    fid_rewards = fid_metric_test.calculate_rewards(test_images, ref_images_normalized, device=device)
+                    fid_results[f"Scale_{scale}"] = fid_rewards
+                    
+                    print(f"     Range: [{fid_rewards.min():.6f}, {fid_rewards.max():.6f}]")
+                    print(f"     Mean:  {fid_rewards.mean():.6f} ± {fid_rewards.std():.6f}")
+                    
+                print(f"\n💡 FID Scale Recommendations:")
+                print(f"   - For rewards similar to MMD/MI: try scales 0.1-0.5")
+                print(f"   - Lower scales (0.01-0.05): more conservative FID influence")
+                print(f"   - Higher scales (0.5-1.0): stronger FID influence")
+                    
+            except Exception as e:
+                print(f"   ❌ FID testing error: {e}")
+                print(f"   💡 Make sure pytorch-fid is installed: pip install pytorch-fid")
         
         # Analyze and recommend weights
         print("\n" + "="*60)

@@ -53,11 +53,8 @@ def calculate_individual_mmd_rewards(generated_features, reference_features, gam
         pairwise_dists = np.sum((X[:, np.newaxis, :] - X[np.newaxis, :, :]) ** 2, axis=2)
         gamma = 1.0 / np.median(pairwise_dists[pairwise_dists > 0])
     
-    # For small sets, use simple averaging
+    # Always calculate individual rewards, even for small batches
     M = len(generated_features)
-    if M <= 2:
-        overall_reward = calculate_mmd_reward(generated_features, reference_features, gamma)
-        return np.ones(M) * overall_reward / M
     
     # PRE-COMPUTE ALL KERNEL MATRICES ONCE
     
@@ -74,7 +71,7 @@ def calculate_individual_mmd_rewards(generated_features, reference_features, gam
     
     # Calculate overall reward with all generated images
     gen_gen_sum = np.sum(K_GG) - np.trace(K_GG)
-    gen_gen_term = gen_gen_sum / (M * (M - 1))
+    gen_gen_term = gen_gen_sum / (M * (M - 1)) if M > 1 else 0  # Prevent division by zero
     gen_ref_term = np.sum(K_GR) / (M * N)
     overall_mmd = gen_gen_term + ref_ref_term - 2 * gen_ref_term
     overall_reward = np.exp(-0.5 * overall_mmd)
@@ -94,7 +91,7 @@ def calculate_individual_mmd_rewards(generated_features, reference_features, gam
         
         # For gen-ref term: subtract row i
         gen_ref_sum_without_i = np.sum(K_GR) - np.sum(K_GR[i, :])
-        gen_ref_term_without_i = gen_ref_sum_without_i / ((M-1) * N)
+        gen_ref_term_without_i = gen_ref_sum_without_i / ((M-1) * N) if M > 1 else 0
         
         # Calculate MMD without image i
         mmd_without_i = gen_gen_term_without_i + ref_ref_term - 2 * gen_ref_term_without_i

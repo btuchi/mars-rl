@@ -417,6 +417,160 @@ def log_generated_features(features, episode: int, prompt: str):
     if _logger:
         _logger.log_generated_features(features, episode, prompt)
 
+def plot_per_image_feature_distribution(features: np.ndarray, episode: int, prompt: str, training_timestamp: str):
+    """
+    Plot the distribution of features WITHIN each image (what your prof wants)
+    Args:
+        features: (batch_size, 512) - each row is one image's 512 features
+        episode: episode number
+        prompt: prompt used
+        training_timestamp: timestamp for folder naming
+    """
+    # Create plots directory
+    current_path = Path(__file__).parent.parent
+    plots_dir = current_path / "outputs" / "plots" / "feature_distribution" / training_timestamp
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Plot feature distribution for first image in batch
+    feature_vector = features[0]  # Take first image's 512 features
+    
+    # Create the plot
+    plt.figure(figsize=(12, 8))
+    
+    # Main histogram
+    plt.subplot(2, 2, 1)
+    plt.hist(feature_vector, bins=50, alpha=0.7, color='steelblue', edgecolor='black')
+    plt.title(f'Feature Distribution - Episode {episode}')
+    plt.xlabel('Feature Value')
+    plt.ylabel('Count')
+    plt.grid(True, alpha=0.3)
+    
+    # Box plot
+    plt.subplot(2, 2, 2)
+    plt.boxplot(feature_vector, vert=True)
+    plt.title('Feature Distribution (Box Plot)')
+    plt.ylabel('Feature Value')
+    plt.grid(True, alpha=0.3)
+    
+    # Feature values over indices
+    plt.subplot(2, 2, 3)
+    plt.plot(feature_vector, alpha=0.7, color='darkgreen')
+    plt.title('Feature Values by Index')
+    plt.xlabel('Feature Index (0-511)')
+    plt.ylabel('Feature Value')
+    plt.grid(True, alpha=0.3)
+    
+    # Statistics text
+    plt.subplot(2, 2, 4)
+    plt.axis('off')
+    stats_text = f"""
+    Episode: {episode}
+    Prompt: {prompt[:50]}...
+    
+    Statistics:
+    Mean: {np.mean(feature_vector):.4f}
+    Std: {np.std(feature_vector):.4f}
+    Min: {np.min(feature_vector):.4f}
+    Max: {np.max(feature_vector):.4f}
+    Range: {np.max(feature_vector) - np.min(feature_vector):.4f}
+    Skew: {np.mean(((feature_vector - np.mean(feature_vector)) / np.std(feature_vector)) ** 3):.4f}
+    """
+    plt.text(0.1, 0.9, stats_text, transform=plt.gca().transAxes, 
+             verticalalignment='top', fontsize=10, fontfamily='monospace')
+    
+    plt.tight_layout()
+    
+    # Save plot
+    safe_prompt = "".join(c for c in prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:20]
+    filename = f"ep{episode:04d}_feature_dist_{safe_prompt}.png"
+    save_path = plots_dir / filename
+    
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"📊 Feature distribution plot saved: {filename}")
+    
+    return str(save_path)
+
+def plot_tsne_feature_space(features: np.ndarray, episode: int, prompt: str, training_timestamp: str):
+    """
+    Plot t-SNE visualization of 512 features within the first image
+    Args:
+        features: (batch_size, 512) - each row is one image's 512 features
+        episode: episode number
+        prompt: prompt used
+        training_timestamp: timestamp for folder naming
+    """
+    try:
+        from sklearn.manifold import TSNE
+        import matplotlib.pyplot as plt
+        
+        # Create plots directory
+        current_path = Path(__file__).parent.parent
+        plots_dir = current_path / "outputs" / "plots" / "tsne" / training_timestamp
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Take first image's 512 features
+        first_image_features = features[0]  # Shape: (512,)
+        
+        # Reshape for t-SNE: each feature becomes a "data point"
+        # We need to create a 2D array where each row is a feature
+        # But t-SNE needs multiple dimensions, so we'll use feature index as additional info
+        feature_data = np.column_stack([
+            first_image_features,  # Feature values
+            np.arange(len(first_image_features))  # Feature indices
+        ])
+        
+        # Run t-SNE on the 512 features
+        tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(first_image_features)-1))
+        tsne_features = tsne.fit_transform(feature_data)
+        
+        # Create the plot
+        plt.figure(figsize=(10, 8))
+        
+        # Scatter plot - each point is one of the 512 features
+        scatter = plt.scatter(tsne_features[:, 0], tsne_features[:, 1], 
+                             c=first_image_features, cmap='viridis', 
+                             s=30, alpha=0.7, edgecolors='black')
+        
+        plt.title(f't-SNE of 512 Features within Image - Episode {episode}\nPrompt: {prompt[:60]}...')
+        plt.xlabel('t-SNE Dimension 1')
+        plt.ylabel('t-SNE Dimension 2')
+        plt.grid(True, alpha=0.3)
+        plt.colorbar(scatter, label='Feature Value')
+        
+        # Add statistics about feature clustering
+        distances = []
+        for i in range(len(tsne_features)):
+            for j in range(i+1, len(tsne_features)):
+                dist = np.linalg.norm(tsne_features[i] - tsne_features[j])
+                distances.append(dist)
+        
+        if distances:
+            plt.figtext(0.02, 0.02, 
+                       f'Feature Clustering Stats:\nMean distance: {np.mean(distances):.3f}\nStd distance: {np.std(distances):.3f}\nTotal features: {len(first_image_features)}',
+                       fontsize=10, bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
+        
+        plt.tight_layout()
+        
+        # Save plot
+        safe_prompt = "".join(c for c in prompt if c.isalnum() or c in (' ', '-', '_')).strip()[:20]
+        filename = f"ep{episode:04d}_feature_tsne_{safe_prompt}.png"
+        save_path = plots_dir / filename
+        
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        print(f"📊 Per-image feature t-SNE plot saved: {filename}")
+        return str(save_path)
+        
+    except ImportError:
+        print("⚠️ scikit-learn not installed - skipping t-SNE plot")
+        return None
+    except Exception as e:
+        print(f"⚠️ Error creating t-SNE plot: {e}")
+        return None
+
 def finalize_logging():
     """Complete logging and save final files"""
     if _logger:

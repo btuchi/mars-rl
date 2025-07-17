@@ -185,7 +185,7 @@ def main():
     features_dir = current_path / "reference_features"
     features_dir.mkdir(exist_ok=True)
     
-    output_path = features_dir / f"reference_{category}_features_v2.npz"
+    output_path = features_dir / f"reference_{category}_features.npz"
     
     print(f"📂 Category: {category}")
     print(f"📂 Images directory: {images_dir}")

@@ -30,6 +30,7 @@ class DiffusionTrajectory:
     total_log_prob: Optional[torch.Tensor] = None
     policy_log_prob: Optional[torch.Tensor] = None  # For policy-modified sampling
     denoising_log_prob: Optional[torch.Tensor] = None  # For LoRA UNet sampling
+    scheduler_log_prob: Optional[torch.Tensor] = None  # For scheduler policy sampling
 
 class DiffusionSampler:
     """Diffusion model sampler that records trajectories for RL training"""
@@ -270,42 +271,22 @@ class DiffusionSampler:
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred_guided = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
             
-            # Calculate proper denoising log probability
-            # Based on the Gaussian denoising distribution in diffusion models
+            # Simple log probability calculation for LoRA UNet training (need to be replaced)
+            # Reverted from complex multivariate Gaussian to simple approach for memory efficiency
             
-            # Get the scheduler's alpha for this timestep
-            alpha_prod_t = self.scheduler.alphas_cumprod[t]
-            
-            # Calculate the "true" noise that should have been predicted
-            # Using the reverse diffusion formula: epsilon = (x_t - sqrt(alpha_t) * x_0) / sqrt(beta_t)
-            
-            # For LoRA training, we treat the noise prediction as a policy action
-            # Log probability = log p(epsilon_predicted | x_t, t, prompt)
-            # Assuming Gaussian distribution: log p(epsilon) = -0.5 * ||epsilon||^2 / sigma^2 - log(sigma * sqrt(2π))
-            
-            # Use scheduler's sigma (noise level) for this timestep
-            sigma = ((1 - alpha_prod_t) ** 0.5)
-            
-            # Calculate log probability of the noise prediction
-            # Higher quality (lower magnitude) predictions get higher probability
-            noise_magnitude = torch.mean(noise_pred_guided ** 2)
-            
-            # Gaussian log probability (simplified, focusing on the quadratic term)
-            step_log_prob = -0.5 * noise_magnitude / (sigma ** 2 + 1e-8)
-            
-            # Add normalization term (constant can be ignored for PPO)
-            # step_log_prob = step_log_prob - torch.log(sigma + 1e-8) - 0.5 * torch.log(2 * torch.pi)
-            
-            # Scale for numerical stability in PPO
-            step_log_prob = step_log_prob * 0.1
+            # Simple approach: treat as negative L2 norm of noise prediction
+            step_log_prob = -0.5 * torch.mean(noise_pred_guided ** 2)
             
             # Safety check for NaN/Inf
             if torch.isnan(step_log_prob) or torch.isinf(step_log_prob):
                 step_log_prob = torch.tensor(-0.1, device=self.device, requires_grad=True)
                 print(f"⚠️ NaN detected in LoRA step_log_prob at timestep {t}, using safe fallback")
             
-            # Accumulate log probability across denoising steps
-            denoising_log_prob = denoising_log_prob + step_log_prob
+            # Simple accumulation: sum across denoising steps
+            if i == 0:
+                denoising_log_prob = step_log_prob
+            else:
+                denoising_log_prob = denoising_log_prob + step_log_prob
             
             # Denoise
             scheduler_output = self.scheduler.step(noise_pred_guided, t, latents, return_dict=True)
@@ -323,14 +304,14 @@ class DiffusionSampler:
             
             # Debug info for first few steps
             if i < 3:
-                print(f"  🔍 Step {i}: t={t.item()}, sigma={sigma:.4f}, noise_mag={noise_magnitude:.4f}, log_prob={step_log_prob.item():.6f}")
+                print(f"  🔍 Step {i}: t={t.item()}, log_prob={step_log_prob.item():.6f}")
             trajectory_steps.append(step)
             
             latents = prev_latents
             
             # Clear intermediate variables
             del noise_pred, noise_pred_uncond, noise_pred_text, noise_pred_guided
-            del latent_model_input, scheduler_output, noise_magnitude, sigma
+            del latent_model_input, scheduler_output
         
         # Decode final image
         with torch.no_grad():
@@ -344,6 +325,118 @@ class DiffusionSampler:
             final_image=final_image.detach(),
             condition=full_text_embeddings[1:2].clone().detach(),
             denoising_log_prob=denoising_log_prob  # Store LoRA UNet log probability
+        )
+        
+        # Clear memory
+        del text_embeddings, uncond_embeddings, full_text_embeddings, latents
+        clear_gpu_cache()
+        
+        return trajectory
+
+    def sample_with_scheduler_policy(
+        self,
+        prompt: str,
+        policy_network,
+        num_inference_steps: int = 20,
+        height: int = 512,
+        width: int = 512,
+        generator: Optional[torch.Generator] = None
+    ) -> DiffusionTrajectory:
+        """
+        Sample with custom scheduler parameters from policy network
+        This gives the policy control over the entire diffusion process
+        """
+        batch_size = 1
+        
+        # Encode prompt
+        text_embeddings = self.encode_prompt(prompt, batch_size)
+        uncond_embeddings = self.encode_prompt("", batch_size)
+        full_text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+        
+        # Extract text features for policy (mean pooling)
+        text_features = torch.mean(text_embeddings, dim=1)  # [1, 768]
+        
+        # Get custom scheduler parameters from policy
+        with torch.enable_grad():
+            policy_network.train()
+            custom_betas, custom_guidance, scheduler_log_prob = policy_network(text_features)
+            
+        # Prepare latent space  
+        latents_shape = (batch_size, 4, height // 8, width // 8)
+        latents = torch.randn(
+            latents_shape,
+            generator=generator,
+            device=self.device,
+            dtype=self.dtype
+        )
+        
+        # Use custom beta schedule to modify scheduler
+        # Note: This is a simplified approach - full implementation would require
+        # creating a custom scheduler with the learned betas
+        latents = latents * self.scheduler.init_noise_sigma
+        
+        # Set timesteps (using default for now, could be made custom too)
+        self.scheduler.set_timesteps(num_inference_steps, device=self.device)
+        timesteps = self.scheduler.timesteps
+        
+        trajectory_steps = []
+        
+        # Denoising loop with custom guidance scales
+        for i, t in enumerate(timesteps):
+            # Use custom guidance scale for this step (with bounds checking)
+            guidance_index = min(i, custom_guidance.shape[1] - 1)  # Clamp to valid range
+            step_guidance_scale = custom_guidance[0, guidance_index].item()  # Extract scalar
+            
+            # Expand latents for classifier-free guidance
+            latent_model_input = torch.cat([latents] * 2)
+            latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+            
+            # Predict noise
+            with torch.no_grad():  # UNet is frozen
+                noise_pred = self.unet(
+                    latent_model_input,
+                    t,
+                    encoder_hidden_states=full_text_embeddings,
+                    return_dict=False
+                )[0]
+            
+            # Classifier-free guidance with custom scale
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred_guided = noise_pred_uncond + step_guidance_scale * (noise_pred_text - noise_pred_uncond)
+            
+            # Compute the previous noisy sample
+            scheduler_output = self.scheduler.step(noise_pred_guided, t, latents, return_dict=True)
+            prev_latents = scheduler_output.prev_sample
+            
+            # Store step information  
+            step = TrajectoryStep(
+                timestep=t.item(),
+                state=latents.clone().detach(),
+                action=torch.tensor([step_guidance_scale]),  # Store the custom guidance as action
+                condition=full_text_embeddings[1:2].clone().detach(),  # Text embeddings
+                log_prob=torch.tensor(0.0),  # Simplified for now
+                noise_pred=noise_pred_guided.clone().detach()
+            )
+            trajectory_steps.append(step)
+            
+            latents = prev_latents
+            
+            # Debug info for first few steps
+            if i < 3:
+                print(f"  🔍 Step {i}: t={t.item()}, custom_guidance={step_guidance_scale:.3f}")
+        
+        # Decode final image
+        with torch.no_grad():
+            latents = 1 / 0.18215 * latents
+            final_image = self.vae.decode(latents).sample
+            final_image = (final_image / 2 + 0.5).clamp(0, 1)
+        
+        # Create trajectory with scheduler log probability
+        trajectory = DiffusionTrajectory(
+            steps=trajectory_steps,
+            final_image=final_image.detach(),
+            condition=full_text_embeddings[1:2].clone().detach(),
+            scheduler_log_prob=scheduler_log_prob  # Store scheduler policy log prob
         )
         
         # Clear memory

@@ -81,7 +81,7 @@ def main(category: str = DEFAULT_CATEGORY):
         
         # Initialize diffusion sampler
         print("Initializing diffusion sampler...")
-        sampler = DiffusionSampler(device=device, use_fp16=False)
+        sampler = DiffusionSampler(device=device, use_fp16=USE_FP16)
         print(f"Sampler dtype: {sampler.dtype}")
         
         # Initialize PPO agent

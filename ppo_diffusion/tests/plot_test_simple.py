@@ -63,24 +63,16 @@ def main():
     
     try:
         # Import and call the existing visualization functions
-        from ppo_diffusion.utils.visualization import plot_from_csv, plot_feature_distributions
+        from ppo_diffusion.utils.visualization import plot_from_csv
         
         # Generate training progress plots
         print("📊 Generating training progress plots...")
-        plot_from_csv(most_recent_timestamp, category)
-        
-        # Generate feature distribution plots
-        print("🎨 Generating feature distribution plots...")
-        success = plot_feature_distributions(most_recent_timestamp, category)
+        success = plot_from_csv(most_recent_timestamp, category)
         
         if success:
-            print("✅ All plots generated successfully!")
-            print(f"📁 Training plots: outputs/plots/training/")
-            print(f"📁 Feature distribution plots: outputs/plots/feature_distribution/{most_recent_timestamp}/")
-        else:
             print("✅ Training plots generated successfully!")
-            print("⚠️ Feature distribution plots failed (may need scikit-learn or more training data)")
-        
+            print(f"📁 Training plots: outputs/plots/training/")
+
     except Exception as e:
         print(f"❌ Error generating plots: {e}")
         import traceback

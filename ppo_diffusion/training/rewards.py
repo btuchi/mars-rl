@@ -1,6 +1,7 @@
 """Reward functions for diffusion training"""
 
 import numpy as np
+import torch
 from typing import List
 from ..core.trajectory import DiffusionTrajectory
 from ..core.features import FeatureExtractor
@@ -32,10 +33,13 @@ class DiffusionRewardFunction:
         # Configurable reward metric system
         self.reward_metric_name = reward_metric
         
-        # Pass weights for MMD_MI metric
+        # Pass weights for MMD_MI metric and FID scale
         if reward_metric == "MMD_MI":
             from ..utils.constants import MMD_WEIGHT, MI_WEIGHT
             self.reward_metric = get_reward_metric(reward_metric, mmd_weight=MMD_WEIGHT, mi_weight=MI_WEIGHT)
+        elif reward_metric == "FID":
+            from ..utils.constants import FID_REWARD_SCALE
+            self.reward_metric = get_reward_metric(reward_metric, reward_scale=FID_REWARD_SCALE)
         else:
             self.reward_metric = get_reward_metric(reward_metric)
         
@@ -51,8 +55,8 @@ class DiffusionRewardFunction:
         Returns:
             individual_rewards: Array of rewards for each trajectory
         """
-        # Check if we need images (for MI) or features (for MMD)
-        needs_images = self.reward_metric_name in ["MI", "MMD_MI"]
+        # Check if we need images (for MI, FID) or features (for MMD)
+        needs_images = self.reward_metric_name in ["MI", "MMD_MI", "FID"]
         
         if needs_images:
             # Extract raw images for MI calculation
@@ -61,15 +65,25 @@ class DiffusionRewardFunction:
             
             for trajectory in trajectories:
                 # Get raw image tensor (3, 512, 512)
-                image_tensor = trajectory.final_image.squeeze(0)  # Remove batch dim
+                # CRITICAL FIX: Ensure image is detached from computation graph
+                image_tensor = trajectory.final_image.clone().detach().squeeze(0)  # Remove batch dim
                 # Convert to numpy (3, 512, 512) -> (512, 512, 3) for MI
                 image_np = image_tensor.permute(1, 2, 0).cpu().numpy()
                 batch_images.append(image_np)
                 
                 # Also extract features for MMD component (if MMD_MI)
+                # CRITICAL FIX: Use detached features to prevent computation graph contamination
                 if self.reward_metric_name == "MMD_MI":
-                    features = self.feature_extractor.extract_trajectory_features(trajectory)
-                    batch_features.append(features.reshape(1, -1))
+                    with torch.no_grad():
+                        detached_image = trajectory.final_image.clone().detach()
+                        from ..core.trajectory import DiffusionTrajectory
+                        detached_trajectory = DiffusionTrajectory(
+                            steps=[],
+                            final_image=detached_image,
+                            condition=trajectory.condition.clone().detach() if trajectory.condition is not None else None
+                        )
+                        features = self.feature_extractor.extract_trajectory_features(detached_trajectory)
+                        batch_features.append(features.reshape(1, -1))
             
             batch_images_array = np.stack(batch_images)  # (batch_size, 512, 512, 3)
             
@@ -84,6 +98,13 @@ class DiffusionRewardFunction:
                     images=batch_images_array,  # For MI component
                     ref_images=self.ref_images  # Reference images for MI
                 )
+            elif self.reward_metric_name == "FID":
+                # FID needs images and reference images
+                individual_rewards = self.reward_metric.calculate_rewards(
+                    batch_images_array,
+                    self.ref_images,  # Need reference images for FID
+                    device=self.feature_extractor.device if hasattr(self.feature_extractor, 'device') else 'cuda'
+                )
             else:
                 # Pure MI - pass images
                 individual_rewards = self.reward_metric.calculate_rewards(
@@ -97,8 +118,17 @@ class DiffusionRewardFunction:
             
             for trajectory in trajectories:
                 # Extract ResNet-18 features from final image
-                features = self.feature_extractor.extract_trajectory_features(trajectory)
-                batch_features.append(features.reshape(1, -1))
+                # CRITICAL FIX: Use detached features to prevent computation graph contamination
+                with torch.no_grad():
+                    detached_image = trajectory.final_image.clone().detach()
+                    from ..core.trajectory import DiffusionTrajectory
+                    detached_trajectory = DiffusionTrajectory(
+                        steps=[],
+                        final_image=detached_image,
+                        condition=trajectory.condition.clone().detach() if trajectory.condition is not None else None
+                    )
+                    features = self.feature_extractor.extract_trajectory_features(detached_trajectory)
+                    batch_features.append(features.reshape(1, -1))
 
             # Stack into single np array (batch_size x feature_dim)
             batch_features_array = np.vstack(batch_features)
